@@ -1,0 +1,407 @@
+---
+title: "4-IV. Poisson Regression: Basic Concepts and Estimation"
+description: "계수형 반응, 로그 연결함수, offset과 노출량, 발생률비 — RNA-seq 카운트 자료"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="4-IV. 포아송 회귀: 기본 개념과 추정">
+        <meta name="ai-context" content="
+        이 챕터는 포아송 회귀의 기본 개념과 추정을 다루며, 실습 자료는 가상 RNA-seq 카운트 행렬입니다.
+        일반화선형모형(GLM)은 분포와 연결함수를 바꿔 끼우는 하나의 틀입니다.
+        선형회귀는 정규분포 + 항등함수, 로지스틱은 이항분포 + logit, 포아송은 포아송분포 + log입니다.
+        포아송 분포는 평균과 분산이 같습니다. 이것이 나중에 과산포 문제의 출발점입니다.
+        모형은 log(E(Y|x)) = beta0 + beta1 x1 + ... 이며 계수의 지수 exp(beta_j)는 발생률비(rate ratio)입니다.
+        노출량이 다르면 offset을 넣습니다. RNA-seq에서는 시료마다 총 read 수(library size)가 다르므로
+        log(library size)를 offset으로 넣습니다. offset은 계수를 추정하지 않고 1로 고정한 항입니다.
+        offset을 빼면 라이브러리 크기 차이가 효과 추정을 오염시킵니다.
+        log 변환 선형회귀와 포아송 회귀는 다릅니다.
+        전자는 E(log Y)를 모형화하고 분산이 일정하다고 보며 Y가 0이면 쓸 수 없습니다.
+        후자는 log(E(Y))를 모형화하고 분산이 평균과 함께 커집니다.
+        자료는 유전자 500개 x 시료 24개이고 처리군 12 대 대조군 12, 배치 2개, 라이브러리 크기는 4.3배 차이 납니다.
+        예제 유전자 G0001의 참 log2 fold change는 1.2이고 추정치는 자연로그 척도에서 0.834입니다(참값 0.8318).
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `4-IV. (Poisson) Basic Concepts and Estimation.docx`
+- 원자료의 High School Awards / Insurance Claims 예제를 **RNA-seq 카운트**로 교체
+- 데이터: `data/rnaseq_counts.csv`, `data/rnaseq_samples.csv`, `data/rnaseq_truth.csv`
+- 생성 스크립트: `data-raw/simulate_rnaseq.R`
+:::
+
+::: {.callout-important collapse="true"}
+## 실습 자료 — KNU-RNA 실험
+
+- 가상 RNA-seq 실험. 참값(fold change, 과산포 정도)을 알고 있음
+- 유전자 500개 × 시료 24개
+
+| 파일 | 내용 |
+|---|---|
+| `rnaseq_counts.csv` | 카운트 행렬 (유전자 × 시료) |
+| `rnaseq_samples.csv` | 시료 정보 — `group`, `batch`, `age`, `lib_size` |
+| `rnaseq_truth.csv` | 유전자별 참값 — `true_lfc`, `dispersion`, `is_de` … |
+
+- 설계: 대조군 12 vs 처리군 12, 배치 2개, 라이브러리 크기 8.2M~34.9M (4.3배 차이)
+- 본문 예제용 대표 유전자
+
+| 유전자 | 성질 | 쓰이는 곳 |
+|---|---|---|
+| `G0001` | 포아송 · DE (참 log2FC = 1.2) | 이 장 |
+| `G0002` | 포아송 · 비DE | 이 장 |
+| `G0021` | **과산포** · DE (참 log2FC = 1.2, 동일) | 4-V |
+| `G0061` | 나이에 **비선형** 반응 | 4-V |
+
+- 카운트 500개 유전자만 실었지만 `lib_size`는 **전체 전사체 기준 총 read 수**
+:::
+
+```{r}
+#| label: setup
+#| include: false
+cnt <- read.csv("data/rnaseq_counts.csv", row.names = 1)
+smp <- read.csv("data/rnaseq_samples.csv")
+tru <- read.csv("data/rnaseq_truth.csv", row.names = 1)
+smp$group <- factor(smp$group, levels = c("Control", "Treated"))
+smp$batch <- factor(smp$batch)
+```
+
+## 1. Introduction
+
+### 1.1 GLM — 하나의 틀
+
+| 모형 | 반응변수 | 분포 | 연결함수 $g$ | $V(Y)$ |
+|---|---|---|---|---|
+| 선형회귀 | 연속형 | 정규 | 항등 $\mu$ | $\sigma^2$ (일정) |
+| 로지스틱 | 0/1 | 이항 | $\log\dfrac{p}{1-p}$ | $p(1-p)$ |
+| 포아송 | 0,1,2,… | 포아송 | $\log\mu$ | $\mu$ |
+
+$$g\bigl(E(Y \mid \mathbf{x})\bigr) = \beta_0 + \beta_1x_1 + \cdots + \beta_px_p$$
+
+- 바뀌는 것은 두 가지뿐 — **반응변수의 분포**와 **연결함수**
+- 추정은 셋 다 같은 방식 (MLE / IRLS). 선형회귀만 닫힌 해가 있음
+
+### 1.2 포아송 분포
+
+$$P(Y = y) = \frac{e^{-\mu}\mu^{y}}{y!}, \qquad y = 0, 1, 2, \ldots$$
+
+$$E(Y) = \mu, \qquad V(Y) = \mu$$
+
+- 단위 시간·공간·기회 안에서 일어난 **사건의 수**
+- 이항분포에서 $n$이 크고 $p$가 아주 작을 때의 극한
+- **평균 = 분산** — 이것이 포아송의 정의적 특징이자, 4-V에서 다룰 과산포의 출발점
+
+```{r}
+#| label: pois-shapes
+#| fig-cap: "평균이 커질수록 퍼지고 대칭에 가까워짐"
+x <- 0:30
+plot(x, dpois(x, 1), type = "h", lwd = 3, col = "#4c72b0",
+     ylim = c(0, 0.4), xlab = "y", ylab = "P(Y = y)")
+points(x + 0.3, dpois(x, 5), type = "h", lwd = 3, col = "#dd8452")
+points(x + 0.6, dpois(x, 15), type = "h", lwd = 3, col = "#55a868")
+legend("topright", bty = "n", lwd = 3,
+       col = c("#4c72b0", "#dd8452", "#55a868"),
+       legend = c("mu = 1", "mu = 5", "mu = 15"))
+```
+
+### 1.3 포아송 회귀 모형
+
+$$\log\bigl(E(Y \mid \mathbf{x})\bigr)
+= \beta_0 + \beta_1x_1 + \cdots + \beta_px_p$$
+
+$$\Longleftrightarrow\quad
+E(Y \mid \mathbf{x}) = e^{\beta_0 + \beta_1x_1 + \cdots + \beta_px_p}$$
+
+- 로그 연결함수를 쓰는 이유
+  - 카운트는 항상 $\ge 0$ → $e^{(\cdot)}$은 자동으로 양수
+  - $X$와 $Y$가 **곱셈적**으로 움직임 (생물학적 자료의 자연스러운 형태)
+- 로지스틱과 마찬가지로 **오차항이 없음** — 분산이 평균으로 결정되므로
+
+### 1.4 log 변환 선형회귀 vs 포아송 회귀
+
+| | `lm(log(y) ~ x)` | `glm(y ~ x, poisson)` |
+|---|---|---|
+| 모형화 대상 | $E(\log Y)$ | $\log E(Y)$ |
+| 분산 | 일정 ($\sigma^2$) | $\mu$ — $X$에 따라 변함 |
+| $y = 0$ | **불가** (로그가 발산) | 문제 없음 |
+| 계수 해석 | 기하평균의 비 | 산술평균의 비 (rate ratio) |
+
+::: {.callout-warning}
+- $E(\log Y) \ne \log E(Y)$ — 옌센 부등식. 둘은 **다른 모형**
+- 카운트가 작을 때(0이 섞일 때) 로그 변환은 쓸 수 없음
+- 굳이 선형회귀를 쓰고 싶다면 로그가 아니라 **분산안정화 변환** $\sqrt{y + 3/8}$
+  - 이것도 $\mu$가 충분히 클 때만 쓸 만함
+:::
+
+## 2. Data Examples — RNA-seq 카운트
+
+### 2.1 자료 훑어보기
+
+```{r}
+#| label: load
+cnt <- read.csv("data/rnaseq_counts.csv", row.names = 1)
+smp <- read.csv("data/rnaseq_samples.csv")
+tru <- read.csv("data/rnaseq_truth.csv", row.names = 1)
+smp$group <- factor(smp$group, levels = c("Control", "Treated"))
+smp$batch <- factor(smp$batch)
+dim(cnt)
+head(smp, 4)
+table(smp$group, smp$batch)
+```
+
+```{r}
+#| label: count-dist
+#| fig-cap: "카운트의 분포 — 오른쪽으로 길게 늘어짐"
+#| fig-width: 8
+#| fig-height: 3.5
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+hist(as.matrix(cnt), nclass = 100, col = "#4c72b0", border = NA,
+     xlab = "count", main = "원 척도")
+hist(log2(as.matrix(cnt) + 1), nclass = 50, col = "#4c72b0",
+     border = NA, xlab = "log2(count + 1)", main = "로그 척도")
+par(op)
+```
+
+```{r}
+#| label: mean-var
+#| fig-cap: "평균-분산 관계 — 포아송이면 기울기 1의 직선 위에 놓여야 함"
+ctl <- as.matrix(cnt[, smp$group == "Control"])
+mu  <- rowMeans(ctl)
+vr  <- apply(ctl, 1, var)
+ok  <- mu > 0
+plot(mu[ok], vr[ok], log = "xy", pch = 20, cex = 0.5, col = "#999999",
+     xlab = "유전자별 평균", ylab = "유전자별 분산")
+abline(0, 1, col = "red", lwd = 2)
+points(mu[tru$is_poisson == 1], vr[tru$is_poisson == 1],
+       pch = 20, cex = 0.7, col = "#4c72b0")
+legend("topleft", bty = "n", pch = c(20, 20, NA), lwd = c(NA, NA, 2),
+       col = c("#999999", "#4c72b0", "red"),
+       legend = c("전체 유전자", "포아송 유전자", "분산 = 평균"))
+```
+
+::: {.callout-important}
+- 파란 점(포아송으로 만든 유전자)은 빨간 선 위에 놓임
+- **대부분의 유전자는 선 위쪽**에 있음 — 분산이 평균보다 훨씬 큼
+- 이것이 RNA-seq의 기본 사실이고, 4-V에서 다룰 **과산포**
+- 이 장에서는 포아송이 맞는 유전자로 개념을 먼저 익힘
+:::
+
+### 2.2 라이브러리 크기 — 노출량
+
+```{r}
+#| label: libsize
+round(range(smp$lib_size) / 1e6, 2)
+round(max(smp$lib_size) / min(smp$lib_size), 2)
+```
+
+- 시료마다 총 read 수가 4.3배까지 차이 남
+- 같은 발현량이라도 **깊게 읽은 시료에서 카운트가 크게 나옴**
+- → 카운트를 그대로 비교하면 안 되고, **읽은 양으로 나눠 줘야 함**
+
+```{r}
+#| label: libsize-effect
+#| fig-cap: "라이브러리 크기와 유전자 카운트"
+plot(smp$lib_size / 1e6, as.numeric(cnt["G0002", ]),
+     pch = 19, col = c("#4c72b0", "#dd8452")[smp$group],
+     xlab = "Library size (million reads)", ylab = "G0002 count")
+legend("topleft", bty = "n", pch = 19, col = c("#4c72b0", "#dd8452"),
+       legend = levels(smp$group))
+```
+
+- `G0002`는 참 fold change가 **0**인 유전자인데도 카운트가 크게 다름 — 전부 깊이 차이 때문
+
+## 3. Model Description and Estimation
+
+### 3.1 계수의 해석 — 발생률비
+
+- $X_j$가 1 증가할 때
+
+$$\frac{E(Y \mid x_j + 1)}{E(Y \mid x_j)}
+= \frac{e^{\beta_0 + \cdots + \beta_j(x_j+1) + \cdots}}
+       {e^{\beta_0 + \cdots + \beta_jx_j + \cdots}}
+= e^{\beta_j}$$
+
+- $e^{\beta_j}$ = **rate ratio** (발생률비)
+  - 로지스틱의 odds ratio와 같은 자리
+  - 차이: 여기서는 **평균 자체의 비**이므로 해석이 더 직접적
+- RNA-seq에서는 이것이 곧 **fold change**
+
+$$\log_2(\text{fold change}) = \frac{\beta_j}{\log 2}$$
+
+### 3.2 Offset — 노출량을 모형에 넣는 법
+
+- 사건 수는 **관찰한 양**에 비례함
+  - 보험 청구 건수 ↔ 가입 기간
+  - 유전자 카운트 ↔ 라이브러리 크기
+- 모형화해야 하는 것은 카운트가 아니라 **비율(rate)**
+
+$$\log\!\left(\frac{E(Y)}{t}\right) = \mathbf{x}^T\boldsymbol\beta
+\quad\Longleftrightarrow\quad
+\log E(Y) = \mathbf{x}^T\boldsymbol\beta + \underbrace{\log t}_{\text{offset}}$$
+
+::: {.callout-important}
+- offset은 **계수를 추정하지 않고 1로 고정한 항**
+- `glm(y ~ x, family = poisson, offset = log(t))`
+- $\log t$를 그냥 설명변수로 넣는 것(`+ log(t)`)과 **다름**
+  - 설명변수로 넣으면 계수가 자유롭게 추정됨 → 비율 모형이 아님
+:::
+
+### 3.3 최대가능도추정
+
+$$\ell(\boldsymbol\beta) = \sum_{i=1}^{n}
+\bigl\{ y_i \log\mu_i - \mu_i - \log(y_i!) \bigr\},
+\qquad \mu_i = e^{\mathbf{x}_i^T\boldsymbol\beta + \log t_i}$$
+
+- 점수방정식
+
+$$\frac{\partial \ell}{\partial \beta_j}
+= \sum_{i=1}^{n} x_{ij}\,(y_i - \mu_i) = 0$$
+
+- 로지스틱과 **같은 형태** — $(y_i - \hat\mu_i)$의 가중합이 0
+- 닫힌 해 없음 → IRLS
+
+## 4. Data Example — Model Estimation
+
+### 4.1 한 유전자 적합하기
+
+```{r}
+#| label: fit-g1
+d <- data.frame(count = as.numeric(cnt["G0001", ]), smp)
+d$off <- log(d$lib_size)
+head(d[, c("sample_id", "group", "batch", "count", "lib_size")], 4)
+
+m1 <- glm(count ~ group, family = poisson, data = d, offset = off)
+summary(m1)
+```
+
+```{r}
+#| label: interpret-g1
+c(rate_ratio = exp(coef(m1)[2]),
+  log2FC = coef(m1)[2] / log(2),
+  true_log2FC = tru["G0001", "true_lfc"])
+```
+
+::: {.callout-important}
+- 추정 log2 fold change $= 1.203$, 참값 $= 1.2$
+- 처리군의 발현 속도가 대조군의 $e^{0.834} = 2.30$배
+- 절편 $-9.31$은 $\log(\text{대조군 CPM} \times 10^{-6})$에 해당 → CPM으로 되돌리면 90.5
+:::
+
+```{r}
+#| label: intercept-meaning
+## 절편을 CPM으로 되돌려 보기
+c(from_model = exp(coef(m1)[1]) * 1e6,
+  observed_cpm = mean(d$count[d$group == "Control"] /
+                        d$lib_size[d$group == "Control"] * 1e6))
+```
+
+### 4.2 offset을 빼면 어떻게 되나
+
+```{r}
+#| label: no-offset
+m_no  <- glm(count ~ group, family = poisson, data = d)
+m_cov <- glm(count ~ group + off, family = poisson, data = d)
+round(rbind(
+  `offset 사용`      = summary(m1)$coef[2, ],
+  `offset 없음`      = summary(m_no)$coef[2, ],
+  `log(lib)를 변수로` = summary(m_cov)$coef[2, ]), 4)
+```
+
+```{r}
+#| label: no-offset-why
+## 우연히 두 군의 라이브러리 크기가 다르다
+round(tapply(d$lib_size, d$group, mean) / 1e6, 2)
+
+## log(lib)를 변수로 넣으면 그 계수가 1 근처로 추정됨
+round(summary(m_cov)$coef["off", ], 4)
+```
+
+::: {.callout-warning}
+- 대조군의 평균 라이브러리가 처리군보다 큼
+- offset을 빼면 그 차이가 **처리 효과에 섞여 들어감** — 추정치가 0.834에서 0.508로 무너짐 (참값 0.832)
+- `log(lib_size)`를 설명변수로 넣으면 계수가 1 근처로 추정되어 offset과 비슷해지지만
+  - 자유도를 하나 쓰고, "비율을 모형화한다"는 해석이 사라짐
+  - 실제로 추정된 계수는 1.018 — 이론값 **1**에 가까움 → offset으로 고정하는 편이 옳음
+:::
+
+### 4.3 log 변환 선형회귀와 비교
+
+```{r}
+#| label: lm-compare
+d$logcpm <- log(d$count / d$lib_size * 1e6)
+lm1 <- lm(logcpm ~ group, data = d)
+round(rbind(
+  `Poisson (log E(Y))` = summary(m1)$coef[2, 1:2],
+  `lm (E(log Y))`      = summary(lm1)$coef[2, 1:2]), 4)
+```
+
+- 이 유전자는 카운트가 커서 두 방법이 비슷한 답을 줌
+- 카운트가 작으면 이야기가 달라짐
+
+```{r}
+#| label: zero-counts
+## 자료 전체에서 0 카운트가 얼마나 있나
+low <- cnt[tru$base_lcpm < 1, ]
+c(genes = nrow(low), zero_fraction = mean(as.matrix(low) == 0))
+```
+
+- 발현이 낮은 유전자에서는 0이 흔함 → `log(count)`를 쓸 수 없음
+- `log(count + 1)` 같은 임시방편은 편향을 만듦 → **포아송(또는 음이항) 회귀를 써야 함**
+
+### 4.4 배치를 넣은 다중 포아송 회귀
+
+```{r}
+#| label: multi
+m2 <- glm(count ~ group + batch + I((age - 45) / 10),
+          family = poisson, data = d, offset = off)
+round(summary(m2)$coef, 4)
+round(exp(cbind(RR = coef(m2), confint.default(m2)))[-1, ], 4)
+```
+
+- `group`의 계수는 배치·나이를 보정해도 거의 그대로 (0.834 → 0.834)
+- 참값에서 `G0001`은 배치 효과와 나이 효과가 모두 0 → 추정치도 0 근처
+
+### 4.5 MLE 직접 확인
+
+```{r}
+#| label: mle-check
+X <- model.matrix(~ group, data = d)
+y <- d$count
+negll <- function(b) {
+  eta <- as.numeric(X %*% b) + d$off
+  -sum(y * eta - exp(eta))              # log(y!)는 상수라 생략
+}
+o <- optim(c(-9, 1), negll, method = "BFGS")
+rbind(optim = o$par, glm = coef(m1))
+```
+
+```{r}
+#| label: score-check
+## 점수방정식 sum(x_ij (y_i - mu_i)) = 0
+round(as.numeric(t(X) %*% (y - fitted(m1))), 6)
+c(sum_fitted = sum(fitted(m1)), sum_observed = sum(y))
+```
+
+- 절편에 대한 식에서 **적합값의 합 = 관측값의 합**
+
+### 4.6 비교 — 비DE 유전자
+
+```{r}
+#| label: fit-g2
+d2 <- data.frame(count = as.numeric(cnt["G0002", ]), smp)
+m3 <- glm(count ~ group, family = poisson, data = d2,
+          offset = log(lib_size))
+round(summary(m3)$coef, 4)
+c(log2FC = coef(m3)[2] / log(2), true = tru["G0002", "true_lfc"])
+```
+
+- 참값이 0인 유전자 → 추정 log2FC가 0에 가깝고 유의하지 않음
+
+::: {.callout-note}
+## 다음 장으로
+- 이 장은 **포아송이 실제로 맞는** 유전자만 다뤘음
+- 4-V에서는 나머지 대부분의 유전자 — **과산포**가 있는 경우를 다룸
+- 포아송 모형을 그대로 쓰면 위양성이 폭증한다는 것을 수치로 확인함
+:::

@@ -1,0 +1,442 @@
+---
+title: "3-II. Multiple Linear Regression: Inference and Prediction"
+description: "회귀계수의 추론, 부분 F-검정, 회귀선 추정과 예측 — 공변량을 보정한 유전 연관과 개인 LDL 예측"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="3-II. 다중선형회귀: 추론과 예측">
+        <meta name="ai-context" content="
+        이 챕터는 다중선형회귀의 통계적 추론과 예측을 다룹니다.
+        추정량 beta-hat의 분산-공분산 행렬은 sigma^2 * (X'X)^(-1)이며, 각 계수는 자유도 n-p-1인 t분포를 따릅니다.
+        전체 회귀의 유의성은 ANOVA의 F-검정으로 봅니다: H0는 모든 기울기가 0이라는 것입니다.
+        핵심은 순차제곱합(sequential sum of squares)입니다.
+        SSReg(X2|X1)은 X1을 넣은 뒤 X2가 추가로 설명하는 양이므로 변수를 넣는 순서에 따라 값이 달라집니다.
+        계수의 부분집합을 검정할 때는 partial F-test를 쓰며, 축소모형과 완전모형을 anova()로 비교합니다.
+        예측에서는 회귀선(평균 반응)의 신뢰구간과 새 관측치의 예측구간을 구분해야 하며,
+        예측구간에는 새 관측치의 분산 sigma^2가 추가로 더해집니다.
+        예제는 KNU-Lipid 코호트 1500명의 LDL ~ snp_LDLR + age + sex + bmi + pop 모형으로 전체 F = 115.1 (5, 1494)입니다.
+        snp_LDLR의 95% 신뢰구간 (0.283, 0.391)은 참값 0.28을 아슬아슬하게 벗어나는데, 3-III에서 밝혀질 FH 6명 때문입니다.
+        순차제곱합은 BMI를 집단보다 먼저 넣으면 51.76, 나중에 넣으면 38.12로 달라집니다. 잔차제곱합 667.92는 같습니다.
+        유전형만 있는 모형에 공변량 4개를 추가하는 partial F는 106.6 (4, 1494)입니다.
+        60세 남성, BMI 27, Group1, 유전형 BB의 평균 LDL 95% 신뢰구간 폭은 0.21, 예측구간 폭은 2.63입니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `3-II. (Multiple) Statistical Inference and Prediction.docx`
+- 원자료의 주별 SAT 점수(SATData)를 **KNU-Lipid 코호트**로 교체 (3-I과 같은 모형)
+- 데이터: `data/gwas_cohort.csv`
+:::
+
+```{r}
+#| label: setup
+#| include: false
+gw <- read.csv("data/gwas_cohort.csv")
+gw$pop <- factor(gw$pop)
+```
+
+## 1. Statistical Inference
+
+### 1.1 추정량과 그 성질
+
+- 모형과 추정
+
+$$\mathbf{Y} = \mathbf{X}\boldsymbol\beta + \boldsymbol\varepsilon,
+\qquad \hat{\boldsymbol\beta} = (\mathbf{X}^T\mathbf{X})^{-1}\mathbf{X}^T\mathbf{Y}$$
+
+- $\hat{\boldsymbol\beta}$를 $\boldsymbol\varepsilon$으로 다시 쓰면
+
+$$\hat{\boldsymbol\beta} = (\mathbf{X}^T\mathbf{X})^{-1}\mathbf{X}^T(\mathbf{X}\boldsymbol\beta + \boldsymbol\varepsilon)
+= \boldsymbol\beta + (\mathbf{X}^T\mathbf{X})^{-1}\mathbf{X}^T\boldsymbol\varepsilon$$
+
+- $E(\boldsymbol\varepsilon) = 0$이므로
+
+$$E(\hat{\boldsymbol\beta}) = \boldsymbol\beta$$
+
+- → **불편추정량** (단순회귀와 같은 결론)
+
+### 1.2 분산-공분산 행렬
+
+$$V(\hat{\boldsymbol\beta})
+= E\bigl[(\hat{\boldsymbol\beta} - \boldsymbol\beta)(\hat{\boldsymbol\beta} - \boldsymbol\beta)^T\bigr]
+= (\mathbf{X}^T\mathbf{X})^{-1}\mathbf{X}^T E(\boldsymbol\varepsilon\boldsymbol\varepsilon^T)\mathbf{X}(\mathbf{X}^T\mathbf{X})^{-1}$$
+
+- 등분산 가정에서 $E(\boldsymbol\varepsilon\boldsymbol\varepsilon^T) = \sigma^2\mathbf{I}$
+
+$$\boxed{V(\hat{\boldsymbol\beta}) = \sigma^2(\mathbf{X}^T\mathbf{X})^{-1} = \boldsymbol\Sigma}$$
+
+- 읽는 법
+  - 대각원소 = 각 $\hat\beta_j$의 분산
+  - 비대각원소 = 계수들 사이의 **공분산**
+  - 전체 변동 $\sigma^2$에 각 $X$의 특성(변동·상관)이 곱해진 형태
+
+::: {.callout-tip collapse="true"}
+## 공분산과 상관계수
+- 공분산 — $X$ 편차와 $Y$ 편차 곱의 평균
+
+$$\mathrm{Cov}(X,Y) = E[(X - \mu_X)(Y - \mu_Y)]$$
+
+- 상관계수 — 공분산을 표준편차로 표준화
+
+$$\rho_{XY} = \frac{\mathrm{Cov}(X,Y)}{\sigma_X \sigma_Y}$$
+:::
+
+#### Robust standard errors
+
+- OLS 표준오차는 **등분산 가정에 의존**
+- 가정이 깨지면 표준오차가 너무 크거나 작게 나옴
+- 대안
+  - **Weighted least squares** (Part 6-I)
+  - **Robust (Huber-White) standard errors** — $E(\boldsymbol\varepsilon\boldsymbol\varepsilon^T)$를 잔차로 직접 추정
+
+### 1.3 표본분포
+
+- 오차가 정규분포이므로
+
+$$\hat{\boldsymbol\beta} \sim N(\boldsymbol\beta,\ \boldsymbol\Sigma)$$
+
+- $\sigma^2$을 모름 → $MSE$로 대체
+
+$$\hat\sigma^2 = \frac{\sum\hat\varepsilon_i^2}{n-p-1} \sim \chi^2_{n-p-1}$$
+
+- 따라서 각 계수는
+
+$$\frac{\hat\beta_j - \beta_j}{\sqrt{V(\hat\beta_j)}} \sim t_{n-p-1}$$
+
+### 1.4 신뢰구간
+
+$$\hat\beta_j \ \pm\ \underbrace{t_{\alpha/2,\,n-p-1}}_{\text{t-critical point}}
+\cdot \underbrace{\sqrt{V(\hat\beta_j)}}_{\text{standard error}}$$
+
+- 이 구간에 **0이 들어 있으면 유의하지 않음**
+
+### 1.5 유의성 검정
+
+$$H_0: \beta_j = 0 \quad \text{vs.} \quad H_a: \beta_j \neq 0$$
+
+$$t\text{-value} = \frac{\hat\beta_j - 0}{se(\hat\beta_j)}$$
+
+- $|t|$가 클수록 0에서 유의하게 멀리 떨어져 있음
+- **주의**: 이 검정은 "다른 변수들이 이미 모형에 있을 때" $X_j$가 추가로 기여하는지를 봄
+
+## 2. Testing for Subsets of Coefficients
+
+### 2.1 전체 회귀 — ANOVA
+
+- ANOVA 표
+
+| Source | DF | Sum of Sq | Mean SS | F-statistic |
+|---|---|---|---|---|
+| Regression | $p$ | $SSReg$ | $SSReg/p$ | $MSReg/MSE$ |
+| Residual | $n-p-1$ | $SSE$ | $SSE/(n-p-1)$ | |
+| Total | $n-1$ | $SST$ | | |
+
+- 자유도 읽는 법
+  - Total은 실제 $Y$에 대한 것 → $n-1$
+  - Regression은 $X$ 개수 → $p$
+  - Residual은 회귀로 설명하고 남은 것 → $n-p-1$
+
+$$SSReg = \sum_{i=1}^{n}(\hat Y_i - \bar Y)^2, \qquad SST = \sum_{i=1}^{n}(Y_i - \bar Y)^2$$
+
+- 가설
+
+$$H_0: \beta_1 = \beta_2 = \cdots = \beta_p = 0$$
+
+- 기각하면 → **어떤 $X$는 $Y$와 연관이 있다**
+- 검정통계량
+
+$$F = \frac{SSReg/p}{SSE/(n-p-1)} = \frac{MSReg}{MSE},
+\qquad \text{p-value} = P(F_{p,\,n-p-1} > F)$$
+
+- 구조는 ANOVA와 동일: (X로 설명되는 변동) / (남은 변동)
+
+### 2.2 순차제곱합 — 변수 순서가 중요한 이유
+
+$$SST(X_1,\ldots,X_p) = SSReg(X_1,\ldots,X_p) + SSE(X_1,\ldots,X_p)$$
+
+- $SSReg$를 순서대로 쪼갤 수 있음
+
+$$SSReg(X_1,\ldots,X_p) = SSReg(X_1) + SSReg(X_2 \mid X_1)
++ SSReg(X_3 \mid X_1, X_2) + \cdots + SSReg(X_p \mid X_1,\ldots,X_{p-1})$$
+
+| 항 | 의미 |
+|---|---|
+| $SSReg(X_1)$ | $X_1$ 하나로 설명되는 변동 |
+| $SSReg(X_2\mid X_1)$ | $X_1$을 넣은 **뒤 남은 것 중** $X_2$가 설명하는 변동 |
+| $SSReg(X_3\mid X_1,X_2)$ | $X_1, X_2$를 넣은 뒤 $X_3$가 설명하는 변동 |
+
+::: {.callout-important}
+- 각 항은 **앞에 무엇이 들어갔는지에 따라 값이 달라짐**
+- → `anova()`의 Sum Sq는 **변수를 쓴 순서에 의존**
+- 반면 `summary()`의 t검정은 "나머지 전부가 이미 들어간 상태"를 보므로 순서와 무관
+:::
+
+### 2.3 Partial F-test
+
+- 모형을 두 묶음으로 나눔
+  - $x_1,\ldots,x_p$ — **controlling factors** (반드시 넣을 변수)
+  - $z_1,\ldots,z_q$ — **explanatory factors** (검정 대상)
+
+$$Y = \beta_0 + \beta_1x_1 + \cdots + \beta_px_p
++ \alpha_1z_1 + \cdots + \alpha_qz_q + \varepsilon$$
+
+- 가설
+
+$$H_0: \alpha_1 = \alpha_2 = \cdots = \alpha_q = 0
+\quad \text{vs.} \quad H_A: \text{at least one is not zero}$$
+
+- 검정통계량
+
+$$F_{partial} = \frac{SSReg(Z_1,\ldots,Z_q \mid X_1,\ldots,X_p)/q}
+{SSE(Z_1,\ldots,Z_q,X_1,\ldots,X_p)/(n-p-q-1)}$$
+
+- 기각역: $F > F_{\alpha,\,q,\,n-p-q-1}$
+- 실무 감각: $F > 2$ 정도면 "대충 도움이 된다"고 볼 수 있음
+
+## 3. Data Example I — Statistical Inference
+
+- 자료: KNU-Lipid 코호트 (`data/gwas_cohort.csv`, $n = 1500$) — 3-I과 같은 모형
+
+| 변수 | 의미 |
+|---|---|
+| `ldl` | LDL 콜레스테롤 (mmol/L) |
+| `snp_LDLR` | 위험 대립유전자 수 (0/1/2) |
+| `age` | 나이 (세) |
+| `sex` | 성별 (1 = 남성) |
+| `bmi` | 체질량지수 |
+| `pop` | 집단 (Group1/Group2) |
+
+```{r}
+#| label: load-gwas
+gw <- read.csv("data/gwas_cohort.csv")
+gw$pop <- factor(gw$pop)
+dim(gw)
+```
+
+```{r}
+#| label: fit-mlr
+regression.line <- lm(ldl ~ snp_LDLR + age + sex + bmi + pop,
+                      data = gw)
+summary(regression.line)
+```
+
+- 읽는 법
+
+| 항목 | 값 | 해석 |
+|---|---|---|
+| a. 추정과 분포 | $\hat\beta_{snp} = 0.337$, $se = 0.0275$ | 자유도 1494인 t분포 |
+| b. 유의성 검정 | $t = 12.25$, p-value $< 2\times10^{-16}$ | **유의** |
+| c. 전체 회귀 | $F = 115.1$ (5, 1494), p-value $< 2\times10^{-16}$ | 전체 모형도 매우 유의 |
+
+- $R^2 = 0.278$, adjusted $R^2 = 0.276$
+
+::: {.callout-warning}
+- 각 t검정은 "**나머지 변수가 모두 들어간 상태에서**" 그 변수가 추가로 기여하는지를 봄
+- 예: `bmi`의 $t = 8.73$은 유전형·나이·성별·집단을 고정했을 때의 BMI 효과
+  - BMI만 넣은 단순회귀의 $t$(9.42)와 다른 질문 — 3-I의 marginal vs conditional
+- 설명변수끼리 강하게 상관되면 전체 F는 유의한데 개별 t는 유의하지 않을 수 있음 (3-III)
+:::
+
+### 3.1 신뢰구간
+
+```{r}
+#| label: confint-mlr
+confint(regression.line, "snp_LDLR", level = 0.99)
+confint(regression.line, level = 0.95)
+```
+
+```{r}
+#| label: ci-vs-truth
+## 95% 신뢰구간이 참값을 포함하는가
+truth <- c(snp_LDLR = 0.28, age = 0.013, sex = 0.33, bmi = 0.042,
+           popGroup2 = 0.52)
+ci <- confint(regression.line)[names(truth), ]
+cbind(ci, truth = truth,
+      covered = ci[, 1] <= truth & truth <= ci[, 2])
+```
+
+- `snp_LDLR`의 99% 신뢰구간 $(0.266,\ 0.408)$ → **0을 포함하지 않음** → 유의
+- 95% 신뢰구간으로 참값과 비교하면
+  - 공변량 4개는 모두 참값을 포함
+  - `snp_LDLR`만 $(0.283,\ 0.391)$로 참값 0.28을 **아슬아슬하게 벗어남**
+  - 95% 구간이 참값을 놓칠 확률은 5% — 그런데 이것은 우연이 아니라 1-II의 극단값 6명 때문 (3-III)
+
+### 3.2 순차제곱합 — 순서를 바꿔 보기
+
+- BMI와 집단은 서로 상관됨 (Group2의 BMI가 0.70 높음, 3-I)
+
+```{r}
+#| label: seq-ss-A
+## 순서 A: bmi를 pop보다 먼저
+anova(lm(ldl ~ bmi + pop + snp_LDLR + age + sex, data = gw))
+```
+
+```{r}
+#| label: seq-ss-B
+## 순서 B: pop을 bmi보다 먼저
+anova(lm(ldl ~ pop + bmi + snp_LDLR + age + sex, data = gw))
+```
+
+::: {.callout-important}
+## 같은 모형, 다른 제곱합
+| 변수 | 순서 A (bmi 먼저) | 순서 B (pop 먼저) |
+|---|---|---|
+| `bmi` | 51.76 | **38.12** |
+| `pop` | 83.61 | **97.25** |
+| `snp_LDLR`, `age`, `sex` | 69.70 / 23.94 / 28.28 | 69.70 / 23.94 / 28.28 |
+| Residuals | 667.92 | **667.92** |
+
+- 먼저 들어간 변수가 **둘이 공유하는 몫**을 가져감
+  - `bmi` + `pop` 합계(135.37)는 순서와 무관
+- 나머지 세 변수와 잔차 제곱합(667.92)은 **동일**
+- → `anova()` 결과를 "변수 중요도"로 읽으면 안 됨
+- 상관이 강할수록 차이가 극단적 — LD로 묶인 SNP들이 그런 경우 (3-III)
+:::
+
+### 3.3 Partial F-test
+
+- 질문: 유전형만 있는 모형(1-I)에 공변량 4개를 추가할 가치가 있는가?
+
+$$H_0:\ \beta_{age} = \beta_{sex} = \beta_{bmi} = \beta_{pop} = 0$$
+
+```{r}
+#| label: partial-f
+reduced <- lm(ldl ~ snp_LDLR, data = gw)
+anova(reduced, regression.line)
+```
+
+- 결과: $F = 106.6$, p-value $< 2\times10^{-16}$ → **추가할 가치가 있음**
+
+```{r}
+#| label: partial-f-manual
+## 공식으로 직접 계산 (변수 순서: snp_LDLR, age, sex, bmi, pop)
+ss  <- anova(regression.line)[["Sum Sq"]]
+sse <- ss[length(ss)]
+add <- sum(ss[2:5])                    # age, sex, bmi, pop
+dfe <- df.residual(regression.line)
+fstat <- (add / 4) / (sse / dfe)
+c(SSReg_add = add, SSE = sse, F = fstat,
+  p = pf(fstat, 4, dfe, lower.tail = FALSE))
+```
+
+$$F = \frac{SSReg(age,\ sex,\ bmi,\ pop \mid snp)/4}{SSE/(1500-5-1)}
+= \frac{190.63/4}{667.92/1494} = 106.6$$
+
+- 3-III에서는 반대 방향 — 공변량만 있는 모형에 SNP를 넣을 가치 — 를 같은 방법으로 검정
+
+## 4. Regression Line: Estimation and Prediction
+
+### 4.1 회귀선의 추정
+
+$$\hat Y \mid x^* = \hat\beta_0 + \hat\beta_1 x_1^* + \cdots + \hat\beta_p x_p^*
+= x^{*T}\hat{\boldsymbol\beta}$$
+
+- $x^*$는 $(p+1)$차원 벡터 (첫 원소는 절편용 1)
+- 분포: 정규 → $\sigma^2$을 $MSE$로 대체하면 t분포
+
+$$\mathrm{Var}(\hat Y \mid x^*) = \sigma^2\, x^{*T}(\mathbf{X}^T\mathbf{X})^{-1}x^*$$
+
+- 단순회귀의 $\sigma^2\left(\frac1n + \frac{(x^*-\bar x)^2}{S_{xx}}\right)$가 행렬로 일반화된 형태
+
+### 4.2 회귀선의 신뢰구간 — 두 종류
+
+| 대상 | 구간 |
+|---|---|
+| **한 점** $x^*$에서의 평균 반응 | $\hat y\mid x^* \pm t_{\alpha/2,\,n-p-1}\sqrt{\hat\sigma^2 x^{*T}(\mathbf{X}^T\mathbf{X})^{-1}x^*}$ |
+| **회귀면 전체** (모든 $x^*$ 동시) | $\hat y\mid x^* \pm \sqrt{(p+1)F_{\alpha,\,p+1,\,n-p-1}}\sqrt{\hat\sigma^2 x^{*T}(\mathbf{X}^T\mathbf{X})^{-1}x^*}$ |
+
+- 동시 구간은 t 대신 $\sqrt{(p+1)F}$를 씀 → 더 넓음 (동시추론 보정)
+
+### 4.3 예측
+
+- 분산의 구성
+
+| 항 | 값 |
+|---|---|
+| 추정된 회귀면의 변동 | $\sigma^2 x^{*T}(\mathbf{X}^T\mathbf{X})^{-1}x^*$ |
+| 새 관측치 자체의 변동 | $\sigma^2$ |
+| **합계 (예측의 총 변동)** | $\sigma^2 x^{*T}(\mathbf{X}^T\mathbf{X})^{-1}x^* + \sigma^2$ |
+
+- 1개 값에 대한 예측구간
+
+$$x^{*T}\hat{\boldsymbol\beta} \ \pm\ t_{\alpha/2,\,n-p-1}
+\sqrt{\hat\sigma^2\bigl(1 + x^{*T}(\mathbf{X}^T\mathbf{X})^{-1}x^*\bigr)}$$
+
+- $m$개 값에 대한 동시 예측구간
+
+$$\hat y\mid x^* \ \pm\ \sqrt{m F_{\alpha,\,m,\,n-p-1}}
+\sqrt{\hat\sigma^2\bigl(1 + x^{*T}(\mathbf{X}^T\mathbf{X})^{-1}x^*\bigr)}$$
+
+- $m$개를 동시에 예측할수록 구간이 넓어짐
+
+## 5. Data Example II — Estimation and Prediction
+
+- 가상의 한 사람: **60세 남성, BMI 27, Group1, 유전형 BB** (`snp_LDLR = 2`)
+- 두 질문
+  - 이런 조건의 사람들의 **평균** LDL은? → 신뢰구간
+  - 이런 조건의 **한 사람**의 LDL은? → 예측구간
+
+```{r}
+#| label: predict-mlr
+newx <- data.frame(snp_LDLR = 2, age = 60, sex = 1, bmi = 27,
+                   pop = factor("Group1", levels = levels(gw$pop)))
+predict(regression.line, newx, interval = "confidence")
+predict(regression.line, newx, interval = "prediction")
+```
+
+| 구간 | 하한 | 상한 | 폭 |
+|---|---|---|---|
+| Confidence (평균 반응) | 3.63 | 3.84 | 0.21 |
+| Prediction (새 관측치) | 2.42 | 5.05 | 2.63 |
+
+- 점추정 3.73 mmol/L
+- 예측구간이 약 **13배** 넓음 — 새 관측치의 분산 $\sigma^2$이 지배적
+- 1-II(유전형 하나)의 예측구간 폭 2.98보다는 좁아짐 — 공변량이 개인차를 일부 설명
+
+```{r}
+#| label: predict-matrix
+## 행렬 공식으로 직접 계산
+X  <- model.matrix(regression.line)
+xs <- c(1, 2, 60, 1, 27, 0)       # 절편, snp, age, sex, bmi, popGroup2
+s2 <- summary(regression.line)$sigma^2
+
+v_mean <- s2 * as.numeric(t(xs) %*% solve(t(X) %*% X) %*% xs)
+c(fit = sum(xs * coef(regression.line)),
+  se_mean = sqrt(v_mean), se_pred = sqrt(v_mean + s2))
+```
+
+- $\sqrt{\mathrm{Var}(\hat Y\mid x^*)} = 0.052$ vs $\sqrt{\mathrm{Var} + \hat\sigma^2} = 0.671$
+- → 예측 불확실성의 대부분은 **새 관측치 자체의 오차**에서 옴
+- 임상적 의미: 유전형·나이·성별·BMI를 다 알아도 한 사람의 LDL은 ±1.3 mmol/L 범위 → **직접 측정을 대신할 수 없음**
+
+```{r}
+#| label: ci-width
+#| fig-cap: "나이를 바꿔 가며 본 신뢰띠와 예측띠 (나머지는 위의 조건으로 고정)"
+grid <- newx[rep(1, 51), ]
+grid$age <- 30:80
+ci <- predict(regression.line, grid, interval = "confidence")
+pi <- predict(regression.line, grid, interval = "prediction")
+
+plot(gw$age, gw$ldl, pch = 20, cex = 0.5,
+     col = adjustcolor("grey40", 0.4), xlab = "Age",
+     ylab = "LDL (mmol/L)", ylim = range(c(pi, gw$ldl)),
+     main = "LDL vs Age")
+lines(grid$age, ci[, "fit"], col = "red", lwd = 2)
+lines(grid$age, ci[, "lwr"], lty = 2)
+lines(grid$age, ci[, "upr"], lty = 2)
+lines(grid$age, pi[, "lwr"], lty = 3)
+lines(grid$age, pi[, "upr"], lty = 3)
+legend("topleft", bty = "n", lty = c(1, 2, 3),
+       col = c("red", "black", "black"),
+       legend = c("fit", "CI for mean resp.", "Prediction Int."))
+```
+
+::: {.callout-note}
+- 적합선은 전체 산점도보다 **위쪽**에 있음 — 남성·BB·BMI 27인 사람의 선이기 때문
+- 회색 점들은 모든 조건이 섞인 marginal 분포, 빨간 선은 조건을 고정한 conditional 관계
+- 신뢰띠는 자료가 많은 50~60세에서 가장 좁고 양끝으로 벌어짐
+:::

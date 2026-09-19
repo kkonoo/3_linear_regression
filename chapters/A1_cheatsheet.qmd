@@ -1,0 +1,387 @@
+---
+title: "부록 A. 통계량 치트시트"
+description: "가설검정의 절차, 검정 선택 흐름도, 일반 검정과 이 강의의 검정 요약, 분포 사이의 관계"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="부록 A. 통계량 치트시트">
+        <meta name="ai-context" content="
+        이 부록은 가설검정과 검정통계량을 한곳에 정리합니다.
+        가설검정의 절차(가설, 유의수준, 통계량, 판정, 해석)와 1종·2종 오류, p-value 해석의 주의점으로 시작합니다.
+        반응변수와 설명변수의 유형에 따라 검정을 고르는 흐름도를 제시합니다.
+        일반 검정 요약표는 단일·대응·두 표본 t와 z, 비율, 분산(F, Bartlett, Levene), 카이제곱(적합도, 독립성, Fisher, McNemar),
+        비모수(부호, Wilcoxon, Mann-Whitney, Kruskal-Wallis)를 다룹니다.
+        이 강의의 검정 요약표는 회귀계수 t, 전체·부분 F, Tukey, GLM의 Wald z, 우도비와 이탈도, Hosmer-Lemeshow,
+        과산포, 다중검정(Bonferroni, BH, 5e-8, lambda_GC), 가정 점검(Shapiro, Cook, VIF, Moran's I)을 각 장과 연결합니다.
+        분포 관계: t^2 = F(1, df), chi^2_k / k = F(k, 무한대), 자유도가 커지면 t는 정규분포로 갑니다.
+        마지막으로 흔한 검정이 모두 선형모형의 특수한 경우임을 KNU-Lipid 자료로 보입니다.
+        one-sample t = lm(y - mu ~ 1), two-sample t = lm(y ~ group), 대응 t = lm(차이 ~ 1), 상관 검정 = lm(y ~ x)의 t,
+        Pearson 카이제곱 독립성 = 포아송 로그선형모형의 Pearson X^2, Mann-Whitney와 Kruskal-Wallis는 순위에 lm을 적합한 것과 거의 같습니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `Statistical Inference Reference Sheet.pdf`, `cheat_sheet_for_hypothesis.pdf`,
+  `hypothesis.testing.pdf`, `Statistics Consulting Cheat Sheet.pdf`,
+  `Stat 100 Final Cheat Sheets.pdf`, `stat test cheat sheet*.jpg`
+- 원자료는 기초통계의 일반 치트시트 → 개조식으로 다시 정리하고 **이 강의의 검정**을 덧붙임
+- 실행 예제 데이터: `data/gwas_cohort.csv`, `data/family_cohort.csv`
+:::
+
+```{r}
+#| label: setup
+#| include: false
+gw  <- read.csv("data/gwas_cohort.csv")
+gwc <- subset(gw, fh_carrier == 0)
+gwc$geno <- factor(gwc$snp_LDLR)
+fm  <- read.csv("data/family_cohort.csv")
+```
+
+## 1. 가설검정의 절차
+
+1. 귀무가설 $H_0$과 대립가설 $H_a$를 세움 — **등호는 항상 $H_0$ 쪽**
+2. 유의수준 $\alpha$를 정함 (보통 0.05)
+3. 검정통계량을 계산 — §3, §4의 표에서 알맞은 식
+4. 귀무가설 아래 분포에서 p-value(또는 기각역)를 구함
+5. 판정: $p < \alpha$이면 $H_0$ 기각, 아니면 기각하지 못함
+6. **원래 질문의 언어로** 결론을 씀
+
+| | $H_0$이 참 | $H_0$이 거짓 |
+|---|---|---|
+| $H_0$ 기각 | **1종 오류** (확률 $\alpha$) | 옳은 결정 (검정력 $1-\beta$) |
+| $H_0$ 기각 못함 | 옳은 결정 | **2종 오류** (확률 $\beta$) |
+
+- p-value = $H_0$이 참일 때 **지금만큼 또는 더 극단적인** 통계량이 나올 확률
+  - $H_0$이 참일 확률이 **아님**
+- 단측 vs 양측: 방향이 이론으로 정해져 있을 때만 단측 (1-I의 $H_a: \beta_1 > 0$)
+
+::: {.callout-important}
+## 이 강의에서 반복해서 본 주의점
+- **유의성 ≠ 설명력·예측력** — $p = 10^{-26}$인 SNP가 LDL 변동의 7%만 설명 (1-II)
+- **유의하지 않음 ≠ 효과 없음** — 참 효과가 있는 APOE e3/e4도 Tukey에서 비유의 (2-II)
+- **검정을 많이 하면 기준을 바꿔야 함** — 다중검정 (4-V, 5-III)
+- **가정이 깨지면 p-value를 믿을 수 없음** — 과산포(4-V), 상관된 오차(6-II)
+- $n$이 크면 작은 차이도 유의 → 효과 크기와 신뢰구간을 같이 볼 것
+:::
+
+## 2. 검정 선택 흐름도
+
+```{mermaid}
+%%| echo: false
+%%| fig-cap: "반응변수·설명변수 유형에 따른 검정 선택"
+flowchart TD
+  Y{"반응변수 Y의 유형"}
+  Y -->|연속| X1{"설명변수 X"}
+  Y -->|이분 0/1| B["로지스틱 회귀 · 카이제곱 · Fisher"]
+  Y -->|카운트| C["포아송 · 음이항 회귀"]
+  X1 -->|없음, 기준값과 비교| O["단일표본 t · 부호/Wilcoxon"]
+  X1 -->|범주 2개| T{"정규 · 등분산?"}
+  X1 -->|범주 3개 이상| A{"정규 · 등분산?"}
+  X1 -->|연속| R["상관 · 단순/다중회귀"]
+  T -->|예| T2["두 표본 t (대응이면 대응 t)"]
+  T -->|아니오| T3["Welch t · Mann-Whitney"]
+  A -->|예| A2["일원분산분석 + Tukey"]
+  A -->|아니오| A3["변환 후 ANOVA · Kruskal-Wallis"]
+```
+
+| $Y$ | $X$ | 가정이 맞을 때 | 가정이 어려울 때 | 이 강의 |
+|---|---|---|---|---|
+| 연속 | 없음 (기준값) | 단일표본 t | 부호 검정, Wilcoxon 부호순위 | — |
+| 연속 | 범주 2개 | 두 표본 t / 대응 t | Welch t, Mann–Whitney | 2-I 연습 |
+| 연속 | 범주 3개 이상 | 일원분산분석 + Tukey | 변환, Kruskal–Wallis | 2-I, 2-II |
+| 연속 | 연속 1개 | 단순회귀, 상관 | 변환, 로버스트 회귀 | 1-I~III, 6-I |
+| 연속 | 여러 개 | 다중회귀, 부분 F | WLS, GAM, 혼합효과 | 3-I~V, 6-I~II |
+| 이분 | 범주 | 카이제곱, Fisher | — | 3-IV/V |
+| 이분 | 여러 개 | 로지스틱 회귀 | 벌점 로지스틱 | 4-I~III |
+| 카운트 | 여러 개 | 포아송 회귀 | quasi-Poisson, 음이항 | 4-IV~V |
+
+## 3. 일반 검정 요약표
+
+### 3.1 평균에 대한 검정 — z와 t
+
+| 검정 | $H_0$ | 통계량 | 분포 | 조건 | R |
+|---|---|---|---|---|---|
+| 단일표본 z | $\mu = \mu_0$ | $\dfrac{\bar x - \mu_0}{\sigma/\sqrt n}$ | $N(0,1)$ | $\sigma$를 앎 | — |
+| 단일표본 t | $\mu = \mu_0$ | $\dfrac{\bar x - \mu_0}{s/\sqrt n}$ | $t_{n-1}$ | $\sigma$ 모름 | `t.test(x, mu = )` |
+| 대응 t | $\mu_d = 0$ | $\dfrac{\bar d}{s_d/\sqrt n}$ | $t_{n-1}$ | 짝지은 자료 | `t.test(x, y, paired = TRUE)` |
+| 두 표본 t (등분산) | $\mu_1 = \mu_2$ | $\dfrac{\bar x_1 - \bar x_2}{s_p\sqrt{1/n_1 + 1/n_2}}$ | $t_{n_1+n_2-2}$ | 등분산 | `t.test(..., var.equal = TRUE)` |
+| Welch t | $\mu_1 = \mu_2$ | $\dfrac{\bar x_1 - \bar x_2}{\sqrt{s_1^2/n_1 + s_2^2/n_2}}$ | $t_{\nu}$ (아래) | 이분산 허용 | `t.test(...)` 기본값 |
+
+$$s_p^2 = \frac{(n_1 - 1)s_1^2 + (n_2 - 1)s_2^2}{n_1 + n_2 - 2},
+\qquad
+\nu = \frac{\left(s_1^2/n_1 + s_2^2/n_2\right)^2}
+{\dfrac{(s_1^2/n_1)^2}{n_1 - 1} + \dfrac{(s_2^2/n_2)^2}{n_2 - 1}}$$
+
+- 표본크기 조건 (원자료의 기준)
+  - $n < 15$ — 모집단이 정규일 때만
+  - $15 \le n < 40$ — 심한 치우침·극단값만 없으면
+  - $n \ge 40$ — 대체로 괜찮음 (중심극한정리)
+- 대응 자료를 두 표본 t로 분석하면 짝 사이의 상관을 버리게 됨 → 검정력 손실
+
+### 3.2 비율에 대한 검정
+
+| 검정 | $H_0$ | 통계량 | 분포 | 조건 | R |
+|---|---|---|---|---|---|
+| 단일 비율 | $p = p_0$ | $\dfrac{\hat p - p_0}{\sqrt{p_0(1-p_0)/n}}$ | $N(0,1)$ | $np_0,\ n(1-p_0) \ge 10$ | `prop.test(x, n, p = )` |
+| 두 비율 | $p_1 = p_2$ | $\dfrac{\hat p_1 - \hat p_2}{\sqrt{\hat p(1-\hat p)(1/n_1 + 1/n_2)}}$ | $N(0,1)$ | 각 집단 성공·실패 $\ge 5$ | `prop.test(c(x1, x2), c(n1, n2))` |
+
+- $\hat p$ = 두 집단을 합친 비율 (귀무가설 아래 공통 비율)
+- 두 비율 검정의 $z^2$ = 2×2 표의 카이제곱 통계량
+- 신뢰구간은 귀무가설값 대신 $\hat p$로 표준오차를 계산 (원자료의 "plus four" 보정도 있음)
+
+### 3.3 분산에 대한 검정
+
+| 검정 | $H_0$ | 통계량 | 분포 | 조건 | R |
+|---|---|---|---|---|---|
+| 두 분산 F | $\sigma_1^2 = \sigma_2^2$ | $s_1^2 / s_2^2$ | $F_{n_1-1,\,n_2-1}$ | 정규 (매우 민감) | `var.test()` |
+| Bartlett | 모든 $\sigma_i^2$ 같음 | 로그 분산의 가중 비교 | $\chi^2_{k-1}$ | 정규 | `bartlett.test()` |
+| Levene (Brown–Forsythe) | 모든 $\sigma_i^2$ 같음 | $\lvert y - \text{중앙값}\rvert$의 ANOVA F | $F_{k-1,\,N-k}$ | 정규 아니어도 됨 | 아래 코드 |
+
+```r
+## Brown-Forsythe: 집단 중앙값에서의 절대편차로 일원분산분석
+dev <- abs(y - ave(y, g, FUN = median))
+anova(lm(dev ~ g))
+```
+
+### 3.4 범주형 자료 — 카이제곱과 그 친척
+
+| 검정 | 질문 | 통계량 | 분포 | R |
+|---|---|---|---|---|
+| 적합도 | 관측 빈도가 기대 비율을 따르는가 | $\sum \dfrac{(O - E)^2}{E}$ | $\chi^2_{k-1}$ | `chisq.test(x, p = )` |
+| 독립성 | 두 범주형 변수가 독립인가 | $\sum \dfrac{(O - E)^2}{E}$, $E = \dfrac{\text{행합} \times \text{열합}}{N}$ | $\chi^2_{(r-1)(c-1)}$ | `chisq.test(table)` |
+| Fisher 정확검정 | 독립성 (칸이 작을 때) | 초기하분포로 정확히 계산 | — | `fisher.test()` |
+| McNemar | 짝지은 이분 자료의 변화 | $\dfrac{(b - c)^2}{b + c}$ (불일치 칸) | $\chi^2_1$ | `mcnemar.test()` |
+| Cochran–Mantel–Haenszel | 층(strata)을 보정한 독립성 | 층별 2×2 표의 합 | $\chi^2_1$ | `mantelhaen.test()` |
+
+- 기대빈도 $E < 5$인 칸이 많으면 카이제곱 근사가 나쁨 → Fisher
+- 카이제곱 검정은 **연관의 유무**만 봄 — 방향·크기는 odds ratio로 (4-I)
+
+### 3.5 비모수 검정
+
+| 검정 | 모수적 짝 | 무엇을 비교 | R |
+|---|---|---|---|
+| 부호 검정 | 단일표본 / 대응 t | 중앙값 (부호만 사용) | `binom.test(sum(d > 0), sum(d != 0))` |
+| Wilcoxon 부호순위 | 대응 t | 차이의 분포가 0 대칭인가 | `wilcox.test(x, y, paired = TRUE)` |
+| Mann–Whitney (Wilcoxon 순위합) | 두 표본 t | 한 집단이 다른 집단보다 큰 경향 | `wilcox.test(y ~ g)` |
+| Kruskal–Wallis | 일원분산분석 | 여러 집단의 분포 위치 | `kruskal.test(y ~ g)` |
+| 순열 검정 | 거의 모든 검정 | 귀무가설 아래 라벨을 섞어 분포를 만듦 | 직접 구현 (5-I) |
+| Kolmogorov–Smirnov | — | 두 분포 전체가 같은가 | `ks.test()` |
+
+- 정규성 가정이 필요 없지만 **가정이 없는 것은 아님** (독립성, 분포 모양이 같다는 가정 등)
+- 순위만 쓰므로 이상치에 강건 — 6-I 로버스트 회귀와 같은 정신
+- 정규 자료에서는 모수 검정보다 검정력이 약간 낮음
+
+## 4. 이 강의의 검정
+
+### 4.1 t 검정 — 회귀계수와 평균 반응
+
+| 검정 | $H_0$ | 통계량 | 분포 | 장 |
+|---|---|---|---|---|
+| 단순회귀 기울기 | $\beta_1 = 0$ | $\dfrac{\hat\beta_1}{\sqrt{MSE/S_{xx}}}$ | $t_{n-2}$ | [1-I](01_slr_estimation.qmd) |
+| 이론값 검정 | $\beta_1 = c$ | $\dfrac{\hat\beta_1 - c}{se(\hat\beta_1)}$ | $t_{n-2}$ | [1-III](03_slr_examples.qmd) (부모–자녀, $c = 1$) |
+| 다중회귀 개별 계수 | $\beta_j = 0$ (다른 변수 고정) | $\dfrac{\hat\beta_j}{se(\hat\beta_j)}$ | $t_{n-p-1}$ | [3-II](07_mlr_inference.qmd) |
+| 평균 반응 신뢰구간 | — | $\hat y \pm t\,\hat\sigma\sqrt{x^{*T}(\mathbf X^T\mathbf X)^{-1}x^*}$ | $t_{n-p-1}$ | [1-II](02_slr_prediction.qmd), [3-II](07_mlr_inference.qmd) |
+| 예측구간 | — | $\hat y \pm t\,\hat\sigma\sqrt{1 + x^{*T}(\mathbf X^T\mathbf X)^{-1}x^*}$ | $t_{n-p-1}$ | 같음 |
+
+### 4.2 F 검정 — 제곱합의 비
+
+| 검정 | $H_0$ | 통계량 | 분포 | 장 |
+|---|---|---|---|---|
+| 일원분산분석 | $\mu_1 = \cdots = \mu_k$ | $\dfrac{SST_R/(k-1)}{SSE/(N-k)}$ | $F_{k-1,\,N-k}$ | [2-I](04_anova_basics.qmd) |
+| 전체 회귀 | $\beta_1 = \cdots = \beta_p = 0$ | $\dfrac{SSReg/p}{SSE/(n-p-1)}$ | $F_{p,\,n-p-1}$ | [3-II](07_mlr_inference.qmd), [3-III](08_mlr_diagnostics.qmd) |
+| 부분 F | 추가한 $q$개 계수 $= 0$ | $\dfrac{(SSE_R - SSE_F)/q}{SSE_F/(n-p-q-1)}$ | $F_{q,\,n-p-q-1}$ | [3-II](07_mlr_inference.qmd), [3-III](08_mlr_diagnostics.qmd) |
+| 가법 vs 유전형 모형 | 우성편차 $= 0$ | 부분 F ($q = 1$) | $F_{1,\,\cdot}$ | [2-II](05_anova_comparison.qmd), [3-IV/V](09_mlr_casestudy.qmd) |
+| quasi-Poisson 모형 비교 | 계수 $= 0$ | 이탈도 차 $/ (q\hat\phi)$ | $F$ | [4-V](14_poisson_inference.qmd) |
+| 선형 vs GAM | 비선형 항 불필요 | 부분 F (유효자유도) | $F$ 근사 | [4-V](14_poisson_inference.qmd), [6-I](18_other_models_1.qmd) |
+
+- **Tukey HSD** — F가 유의한 뒤 쌍별 비교, $t$ 대신 studentized range $q_{\alpha,\,k,\,N-k}$ ([2-II](05_anova_comparison.qmd))
+
+$$(\hat\mu_i - \hat\mu_j) \pm q_{\alpha,\,k,\,N-k}\sqrt{\frac{MSE}{2}\left(\frac{1}{n_i} + \frac{1}{n_j}\right)}$$
+
+### 4.3 z 검정 — GLM의 Wald 검정
+
+| 검정 | $H_0$ | 통계량 | 분포 | 장 |
+|---|---|---|---|---|
+| 로지스틱 계수 | $\beta_j = 0$ (OR = 1) | $\dfrac{\hat\beta_j}{se(\hat\beta_j)}$ | $N(0,1)$ 근사 | [4-I](10_logistic_basics.qmd), [4-II](11_logistic_inference.qmd) |
+| 포아송 계수 | $\beta_j = 0$ (RR = 1) | 같음 | $N(0,1)$ 근사 | [4-IV](13_poisson_basics.qmd), [4-V](14_poisson_inference.qmd) |
+| OR·RR 신뢰구간 | — | $\exp\{\hat\beta_j \pm z_{\alpha/2}\,se\}$ | — | 같음 |
+
+- t가 아니라 z인 이유: 추정해야 할 $\sigma^2$가 없고, MLE의 **대표본 정규근사**에 기댐
+- 계수가 매우 크면 표준오차가 부풀어 Wald가 오히려 작아짐 (Hauck–Donner, [4-II](11_logistic_inference.qmd)) → 우도비 검정 권장
+
+### 4.4 우도비·이탈도 — 카이제곱 계열
+
+| 검정 | $H_0$ | 통계량 | 분포 | 장 |
+|---|---|---|---|---|
+| 우도비 (LRT) | 축소모형이 맞음 | $D = -2(\ell_R - \ell_F)$ = 이탈도 차 | $\chi^2_q$ | [4-II](11_logistic_inference.qmd), [4-V](14_poisson_inference.qmd) |
+| 이탈도 적합도 | 모형이 자료에 맞음 | 잔차 이탈도 | $\chi^2_{n-p-1}$ | [4-II](11_logistic_inference.qmd) (집계 자료), [4-V](14_poisson_inference.qmd) |
+| Pearson 적합도 | 모형이 자료에 맞음 | $X^2 = \sum r_{P,i}^2$ | $\chi^2_{n-p-1}$ | 같음 |
+| Hosmer–Lemeshow | 로지스틱 보정도가 맞음 | $G$개 위험군의 관측 vs 기대 | $\chi^2_{G-2}$ | [4-II](11_logistic_inference.qmd), [4-III](12_logistic_casestudy.qmd) |
+| 과산포 | $\phi = 1$ | $\hat\phi = X^2/(n-p-1)$ | 비교 기준 1 | [4-V](14_poisson_inference.qmd) |
+| 분산성분 | $\sigma_a^2 = 0$ | 우도비 | 경계 → $\chi^2$ 혼합 | [6-II](19_other_models_2.qmd) |
+
+- 0/1 개별 자료로는 이탈도 적합도 검정이 **불가** → 집계하거나 HL ([4-II](11_logistic_inference.qmd))
+- HL은 그룹 수 $G$에 따라 결론이 흔들림 ([4-III](12_logistic_casestudy.qmd))
+
+### 4.5 여러 번 검정할 때
+
+| 방법 | 통제하는 것 | 기준 | 장 |
+|---|---|---|---|
+| Bonferroni | 가족 전체의 1종 오류 (FWER) | $\alpha / m$ | [4-V](14_poisson_inference.qmd), [6-II](19_other_models_2.qmd) |
+| Benjamini–Hochberg | 거짓 발견 비율 (FDR) | 정렬한 $p_{(i)} \le \dfrac{i}{m}\alpha$ | [4-V](14_poisson_inference.qmd) |
+| 전장유전체 유의수준 | FWER (독립 검정 약 $10^6$개) | $5\times10^{-8}$ | [1-I](01_slr_estimation.qmd), [5-III](17_varsel_casestudy.qmd) |
+| $\lambda_{GC}$ | 검정통계량의 전반적 팽창 | $\dfrac{\text{median}(\chi^2)}{0.455}$ | [5-III](17_varsel_casestudy.qmd), [6-II](19_other_models_2.qmd) |
+| 순열 검정 | 선택 과정 전체의 우연 | 반응을 섞어 귀무분포를 만듦 | [5-I](15_varsel_basics.qmd) |
+
+### 4.6 가정 점검용 지표와 검정
+
+| 무엇을 | 도구 | 기준 | 장 |
+|---|---|---|---|
+| 정규성 | QQ plot, Shapiro–Wilk | 직선 / $p > 0.05$ | [1-II](02_slr_prediction.qmd), [2-II](05_anova_comparison.qmd) |
+| 이상치 | 표준화잔차 | $\lvert r\rvert > 2$, $n$이 크면 Bonferroni 기준 | [1-II](02_slr_prediction.qmd) |
+| 영향점 | Cook's distance, leverage | $D_i > 4/n$ 또는 1, $h_{ii} > 2(p+1)/n$ | [3-III](08_mlr_diagnostics.qmd), [1-III](03_slr_examples.qmd) |
+| 다중공선성 | VIF | $> 10$ | [3-III](08_mlr_diagnostics.qmd) |
+| 시간 상관 | 잔차 자기상관함수 | 신뢰띠 밖 막대 | [6-II](19_other_models_2.qmd) |
+| 공간 상관 | Moran's I | $z$ 검정 | [6-II](19_other_models_2.qmd) |
+
+### 4.7 모형 비교 기준 — 검정은 아님
+
+| 기준 | 식 | 방향 | 장 |
+|---|---|---|---|
+| 수정 결정계수 | $1 - \dfrac{SSE/(n-p-1)}{SST/(n-1)}$ | 클수록 | [3-III](08_mlr_diagnostics.qmd) |
+| Mallows $C_p$ | $\dfrac{SSE_p}{\hat\sigma^2} - n + 2(p+1)$ | 작을수록 | [5-I](15_varsel_basics.qmd) |
+| AIC | $-2\ell + 2(p+1)$ | 작을수록 | [5-I](15_varsel_basics.qmd), [6-I](18_other_models_1.qmd) |
+| BIC | $-2\ell + (p+1)\log n$ | 작을수록 | [5-I](15_varsel_basics.qmd) |
+| 교차검증 오차 | 떼어 둔 자료의 예측오차 | 작을수록 | [4-II](11_logistic_inference.qmd), [5-II](16_regularized.qmd) |
+| AUC | ROC 곡선 아래 면적 | 클수록 | [4-II](11_logistic_inference.qmd), [4-III](12_logistic_casestudy.qmd) |
+
+## 5. 분포 사이의 관계
+
+| 분포 | 정의 | 어디서 나오나 |
+|---|---|---|
+| $Z \sim N(0,1)$ | 표준정규 | 오차, 대표본 추정량 |
+| $\chi^2_k$ | $Z_1^2 + \cdots + Z_k^2$ | 제곱합 ($SSE/\sigma^2$), 이탈도 |
+| $t_\nu$ | $\dfrac{Z}{\sqrt{\chi^2_\nu/\nu}}$ | $\sigma$를 추정해서 쓴 표준화 |
+| $F_{\nu_1,\,\nu_2}$ | $\dfrac{\chi^2_{\nu_1}/\nu_1}{\chi^2_{\nu_2}/\nu_2}$ | 두 제곱합의 비 |
+
+$$t_\nu^2 = F_{1,\,\nu},
+\qquad
+\nu_1 F_{\nu_1,\,\infty} = \chi^2_{\nu_1},
+\qquad
+t_\nu \xrightarrow{\ \nu\to\infty\ } Z,
+\qquad
+z^2 = \chi^2_1$$
+
+- 회귀계수 하나의 t 검정 = 그 계수 하나를 빼는 부분 F 검정 ($t^2 = F$)
+- Wald $z^2$과 우도비 $D$는 둘 다 대표본에서 $\chi^2_1$ → 보통 비슷한 값
+- $n$이 크면 t와 z, F와 $\chi^2/q$의 구분이 사실상 사라짐
+
+```{r}
+#| label: dist-check
+## 공식 직접 계산: 분포 사이의 관계를 분위수로 확인
+df <- c(5, 30, 1494)
+rbind(t_sq  = qt(0.975, df)^2,              # t^2
+      F_1df = qf(0.95, 1, df))              # = F(1, df)
+c(chisq3_over3 = qchisq(0.95, 3) / 3,       # chi^2_3 / 3
+  F_3_inf      = qf(0.95, 3, 1e7))          # = F(3, 무한대)
+round(c(z = qnorm(0.975), t5 = qt(0.975, 5), t30 = qt(0.975, 30),
+        t1000 = qt(0.975, 1000)), 4)
+```
+
+```{r}
+#| label: dist-plot
+#| fig-cap: "자유도가 커질수록 t분포는 표준정규에 가까워짐"
+#| fig-width: 6
+#| fig-height: 4
+x <- seq(-4, 4, length.out = 400)
+plot(x, dnorm(x), type = "l", lwd = 2, ylab = "density",
+     xlab = "value")
+lines(x, dt(x, 3), lwd = 2, lty = 2, col = "#dd8452")
+lines(x, dt(x, 30), lwd = 2, lty = 3, col = "#4c72b0")
+legend("topright", c("N(0,1)", "t (3)", "t (30)"), lwd = 2,
+       lty = 1:3, col = c("black", "#dd8452", "#4c72b0"), bty = "n")
+```
+
+## 6. 흔한 검정은 선형모형이다
+
+- §3의 검정 대부분은 **회귀모형의 특수한 경우**
+  - 따로 외울 필요 없이 `lm()` / `glm()` 하나로 이해 가능
+  - (Lindeløv, "Common statistical tests are linear models", 2019의 아이디어)
+
+| 검정 | 같은 선형모형 | 검정하는 계수 |
+|---|---|---|
+| 단일표본 t | `lm(y - mu0 ~ 1)` | 절편 |
+| 두 표본 t (등분산) | `lm(y ~ group)` | 집단 더미 |
+| 대응 t | `lm(y1 - y2 ~ 1)` | 절편 |
+| 상관계수 검정 | `lm(y ~ x)` | 기울기 (표준화하면 기울기 = $r$) |
+| 일원분산분석 | `lm(y ~ factor)` | 더미 전체 (F) |
+| 카이제곱 독립성 | `glm(count ~ A + B, poisson)` | 적합도 (상호작용 없음) |
+| Mann–Whitney | `lm(rank(y) ~ group)` | 집단 더미 (근사) |
+| Kruskal–Wallis | `lm(rank(y) ~ factor)` | 더미 전체 (근사) |
+
+- 실행 예: KNU-Lipid (FH 보인자 제외 1494명), KNU-Family
+
+```{r}
+#| label: tests-as-lm
+## 검정 함수의 (t, p)와 lm 계수 행의 (t, p)를 나란히
+cmp <- function(a, b) {
+  c(t_test = unname(a$statistic), t_lm = unname(b[3]),
+    p_test = a$p.value, p_lm = unname(b[4]))
+}
+fa <- fm$ldl[fm$role == "father"]; mo <- fm$ldl[fm$role == "mother"]
+out <- rbind(
+  one_sample  = cmp(t.test(gwc$ldl, mu = 3),                # 평균 = 3?
+                    summary(lm(ldl - 3 ~ 1, data = gwc))$coef[1, ]),
+  two_sample  = cmp(t.test(ldl ~ sex, data = gwc, var.equal = TRUE),
+                    summary(lm(ldl ~ sex, data = gwc))$coef["sex", ]),
+  paired      = cmp(t.test(fa, mo, paired = TRUE),          # 부 vs 모
+                    summary(lm(I(fa - mo) ~ 1))$coef[1, ]),
+  correlation = cmp(cor.test(gwc$ldl, gwc$bmi),
+                    summary(lm(ldl ~ bmi, data = gwc))$coef["bmi", ]))
+signif(out, 5)
+```
+
+- 네 쌍 모두 통계량과 p-value가 **완전히 같음**
+- 두 표본 t의 부호만 반대 — `t.test`는 (0군 − 1군), `lm`은 (1군 − 0군)
+
+```{r}
+#| label: chisq-as-glm
+## 카이제곱 독립성 = 포아송 로그선형모형 (행 + 열, 상호작용 없음)
+tb <- table(gwc$pop, gwc$snp_AIM)
+tb
+cs <- chisq.test(tb)
+d  <- as.data.frame(tb)
+names(d) <- c("pop", "geno", "n")
+ll <- glm(n ~ pop + geno, family = poisson, data = d)
+c(chisq_test = unname(cs$statistic),
+  glm_pearson_X2 = sum(residuals(ll, type = "pearson")^2),
+  glm_deviance_G2 = deviance(ll), df = df.residual(ll))
+```
+
+- `chisq.test`의 통계량 = 독립 모형의 **Pearson $X^2$** (3-IV/V의 477.73)
+- 같은 모형의 이탈도 $G^2$는 우도비 버전 — 값이 조금 다르지만 같은 질문
+
+```{r}
+#| label: rank-as-lm
+## 비모수 검정 ≈ 순위에 대한 선형모형
+g2 <- wilcox.test(ldl ~ sex, data = gwc)
+l2 <- summary(lm(rank(ldl) ~ sex, data = gwc))$coef["sex", 4]
+g3 <- kruskal.test(ldl ~ geno, data = gwc)
+l3 <- anova(lm(rank(ldl) ~ geno, data = gwc))[1, "Pr(>F)"]
+signif(rbind(mann_whitney   = c(test = g2$p.value, lm_rank = l2),
+             kruskal_wallis = c(test = g3$p.value, lm_rank = l3)), 3)
+```
+
+- 순위로 바꾼 $Y$에 `lm`을 적합하면 p-value가 거의 같음 (근사)
+- 비모수 검정 = "순위로 변환한 뒤의 모수 검정"으로 이해해도 무방 ($n$이 충분하면)
+
+::: {.callout-tip}
+## 정리
+- 검정 이름을 외우기보다 **어떤 모형의 어떤 계수를 검정하는지**를 볼 것
+- 그러면 공변량을 추가하거나(다중회귀), 반응 분포를 바꾸거나(GLM), 오차 구조를 바꾸는(6-II) 확장이 자연스러움
+- 이 강의 전체가 그 확장의 목록
+:::

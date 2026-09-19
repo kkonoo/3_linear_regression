@@ -1,0 +1,9 @@
+/.quarto/
+/_site/
+/_freeze/
+.Rproj.user
+.Rhistory
+.RData
+
+# 원자료에서 추출한 참고용 이미지 (수식은 LaTeX로, 그림은 SVG로 다시 만들 예정)
+_source/media/

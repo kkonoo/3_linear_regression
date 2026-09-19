@@ -1,0 +1,517 @@
+---
+title: "1-III. Simple Linear Regression: Data Examples"
+description: "부모–자녀 LDL 회귀로 유전 이론 검정하기, 중성지방의 로그 변환과 단일유전자 이상값"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="1-III. 단순선형회귀 데이터 예제">
+        <meta name="ai-context" content="
+        이 챕터는 단순선형회귀의 전체 흐름을 두 가지 유전학 자료로 실습합니다.
+        첫째, 부모-자녀 회귀입니다. 가계 코호트 KNU-Family 300가계에서 자녀 3명의 평균 LDL(Y)을 부모 평균 LDL(X)에 회귀합니다.
+        회귀라는 이름은 Galton의 부모-자녀 키 연구(평균으로의 회귀)에서 왔습니다.
+        자녀가 부모를 그대로 닮는다면 기울기가 1이어야 하므로 귀무가설은 beta_1 = 0이 아니라 beta_1 = 1입니다.
+        정량유전학에서 부모 평균에 대한 자녀의 회귀 기울기는 유전율 h^2의 추정치이며 참값은 0.5입니다.
+        일부러 추가한 가족성 고콜레스테롤혈증(FH) 가계 하나가 영향점이며(Cook's distance 1.13),
+        포함하면 기울기 0.571, 빼면 0.491 (95% CI 0.382~0.600)로 참값을 포함합니다.
+        아버지만, 어머니만으로 회귀하면 기울기가 각각 0.234, 0.244로 이론값 h^2/2 = 0.25와 맞습니다.
+        둘째, 중성지방(TG)과 BMI입니다. TG는 오른쪽으로 치우쳐(왜도 2.98) 로그를 취하면 왜도 0.06, 등분산이 됩니다.
+        log(TG) = -0.68 + 0.048 BMI 이며 BMI 1 증가당 TG 약 4.9% 증가입니다.
+        표준화잔차 5.5인 KL0719를 빼고 적합한 모형으로 그 사람을 예측하면
+        관측 TG 13.77 mmol/L가 95% 예측구간 (0.70, 3.32)의 상한보다 4.1배 커서 다른 기전(LPL 결핍)임을 보입니다.
+        사용 파일: data/family_cohort.csv, data/gwas_cohort.csv, data/gwas_cohort_ext.csv
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `1-III. (Simple) Data examples.docx`
+- 원자료의 두 예제를 유전학 자료로 교체
+
+| 원자료 | 이 장 | 공통 구조 |
+|---|---|---|
+| 구매력평가(PPP) — 환율 ~ 물가 차이 | 부모–자녀 LDL 회귀 | 이론이 기울기 값을 예측 → $H_0: \beta_1 = 1$ |
+| 브라질 (초인플레이션) | FH 가계 (단일유전자) | 영향점 하나 |
+| 선진국 / 개도국으로 나누기 | 아버지 / 어머니로 나누기 | 하위집단 분석 |
+| 플로리다 대선 — Buchanan ~ Bush 득표 | 중성지방 ~ BMI | 로그 변환 |
+| Palm Beach (나비형 투표용지) | LPL 결핍 1명 | 다른 기전의 이상값 |
+
+- 데이터: `data/family_cohort.csv`, `data/gwas_cohort.csv`, `data/gwas_cohort_ext.csv`
+- 생성 스크립트: `data-raw/simulate_part6_2.R`, `data-raw/simulate_cohort_ext.R`
+:::
+
+::: {.callout-important collapse="true"}
+## 새 실습 자료 — KNU-Family, KNU-Lipid 확장
+
+- **KNU-Family** — 핵가족 300가계 × 5명 (아버지, 어머니, 자녀 3)
+  - LDL 생성 모형은 KNU-Lipid와 같은 계수 + 가계를 따라 전달되는 다유전자 배경 $g$
+  - $g$의 분산 0.19, 나머지 오차 분산 0.19 → **유전율 $h^2 = 0.5$** (참값)
+  - 6-II(혼합효과모형)에서 다시 씀
+- **KNU-Lipid 확장** (`gwas_cohort_ext.csv`) — 같은 1500명에 두 변수를 추가
+  - `tg` 중성지방 (mmol/L), `apoe` APOE 유전형 (2-II에서 사용)
+
+$$\log(\text{tg}) = \log 1.4 + 0.045(\text{bmi} - 24) + 0.006(\text{age} - 55) + 0.12\,\text{sex}
++ 0.10\,\text{Group2} + \text{APOE 효과} + N(0, 0.38^2)$$
+
+  - 한 명(`lpl_def = 1`)은 LPL 결핍으로 TG가 약 10배 — 단일유전자 열성 질환
+- 기존 `gwas_cohort.csv`는 바꾸지 않았으므로 다른 장의 수치는 그대로
+:::
+
+## 1. Testing the Theory of Inheritance #1
+
+### 1.1 배경과 데이터
+
+- **회귀(regression)** 라는 이름의 기원
+  - Galton(1886): 키가 큰 부모의 자녀는 크지만, 부모만큼 크지는 않음
+  - 자녀가 평균 쪽으로 돌아옴 → "regression toward mediocrity" (**평균으로의 회귀**)
+- 이론이 예측하는 기울기
+  - 자녀가 부모를 **그대로** 닮는다면 (전부 유전, 환경 영향 없음) → $\beta_1 = 1$
+  - 정량유전학: 부모 평균에 대한 자녀의 회귀 기울기 = **유전율 $h^2$**
+    (형질 분산 중 유전으로 전달되는 비율)
+- 변수 (가계 단위)
+  - $X$ = **부모 평균** LDL (midparent) = (아버지 + 어머니) / 2
+  - $Y$ = **자녀 3명의 평균** LDL
+
+```{r}
+#| label: load-family
+fm  <- read.csv("data/family_cohort.csv")
+ch  <- fm[fm$role == "child", ]
+fam <- data.frame(
+  fid    = unique(fm$fid),
+  father = fm$ldl[fm$role == "father"],
+  mother = fm$ldl[fm$role == "mother"],
+  child  = as.numeric(tapply(ch$ldl, ch$fid, mean)))
+fam$midparent <- (fam$father + fam$mother) / 2
+dim(fam)
+head(fam, 3)
+```
+
+- 원래 코호트에는 없는 **FH 가계** 하나를 영향점의 효과를 보기 위해 추가
+  - 아버지가 가족성 고콜레스테롤혈증(FH) 보인자 — 단일유전자 우성
+  - 자녀 3명 중 2명이 FH를 물려받음
+
+```{r}
+#| label: add-fh
+fh <- data.frame(fid = "FH01", father = 8.1, mother = 2.9,
+                 child = mean(c(7.6, 3.1, 7.2)))
+fh$midparent <- (fh$father + fh$mother) / 2
+fam <- rbind(fam, fh)
+fam$type <- ifelse(fam$fid == "FH01", "FH", "Polygenic")
+dim(fam)
+```
+
+### 1.2 탐색적 분석
+
+```{r}
+#| label: fam-eda
+#| fig-cap: "부모 평균 대 자녀 평균 LDL (점선: 기울기 1) / 부모 평균의 사분위별 자녀 LDL"
+#| fig-width: 9
+#| fig-height: 4.5
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+plot(fam$midparent, fam$child, pch = 19,
+     col = ifelse(fam$type == "FH", "red", adjustcolor("grey30", 0.6)),
+     xlab = "Midparent LDL", ylab = "Mean LDL of children",
+     main = "Scatterplot")
+abline(0, 1, lty = 2)
+q4 <- cut(fam$midparent, quantile(fam$midparent, 0:4 / 4),
+          include.lowest = TRUE, labels = paste0("Q", 1:4))
+boxplot(child ~ q4, data = fam, col = "#dce6f2",
+        xlab = "Midparent quartile", ylab = "Mean LDL of children",
+        main = "By parent quartile")
+par(op)
+```
+
+- 부모의 LDL이 높을수록 자녀의 LDL도 높음 — 그러나 점들이 기울기 1인 점선보다 **완만함**
+- 오른쪽 위 멀리 떨어진 빨간 점 하나 = FH 가계
+- 전형적인 **influential point**
+
+### 1.3 회귀 적합
+
+```{r}
+#| label: fam-fit
+pa <- lm(child ~ midparent, data = fam)
+summary(pa)
+```
+
+- 적합 여부는 네 가지를 같이 봄: **estimate, standard error, $R^2$, p-value**
+- 결과
+  - $\hat\beta_1 = 0.5715$ (s.e. $0.0545$)
+  - $R^2 = 0.269$
+
+### 1.4 이론의 검정 — 기울기가 1인가
+
+::: {.callout-important}
+- 여기서 검정할 귀무가설은 $\beta_1 = 0$이 **아님**
+- "자녀가 부모를 그대로 닮는다"는 이론의 예측 → $\beta_1 = 1$
+- `summary()`의 p-value는 $\beta_1 = 0$에 대한 것 → 여기서는 쓸모없음
+:::
+
+$$t = \frac{\hat\beta_1 - 1}{s.e.(\hat\beta_1)}$$
+
+```{r}
+#| label: fam-test1
+b1  <- coef(pa)[2]
+se1 <- summary(pa)$coefficients[2, 2]
+tvalue <- (b1 - 1) / se1
+pvalue <- 2 * pt(-abs(tvalue), df = df.residual(pa))
+c(t = tvalue, p = pvalue)
+```
+
+- $t = -7.86$, p-value $= 6.9\times10^{-14}$
+- → **$\beta_1 = 1$을 기각** — 자녀는 부모만큼 극단적이지 않음 = **평균으로의 회귀**
+- 기울기 자체는 유전율의 추정치: $\hat h^2 = 0.57$ (참값 0.5)
+
+::: {.callout-tip collapse="true"}
+## `car::linearHypothesis()`로 같은 검정
+```r
+library(car)
+linearHypothesis(pa, c(0, 1), rhs = 1)
+```
+- 계수 벡터에 대한 선형가설 $L\beta = c$를 일반적으로 검정
+- 여기서는 $\beta_1 = 1$이므로 $L = (0,1)$, $c = 1$
+:::
+
+::: {.callout-note}
+## 왜 평균으로 회귀하는가
+- 부모의 LDL = 유전 성분 + 환경·우연 성분
+- 자녀에게 전달되는 것은 **유전 성분뿐**, 그것도 부모 각각의 절반씩 무작위로
+- 부모의 LDL이 극단적으로 높은 이유 중 일부는 환경·우연 → 자녀에게는 안 넘어감
+- → 기울기 $= h^2 < 1$
+:::
+
+## 2. Testing the Theory of Inheritance #2
+
+### 2.1 적합 여부 — 신뢰띠와 예측띠
+
+- 적합이 잘 됐는지 눈으로 보는 그림
+- **더 넓은 띠 = 예측구간**
+- 그 구간을 벗어나는 점이 이상치
+
+```{r}
+#| label: fam-bands
+#| fig-cap: "Fitted Line Plot — 점선: 평균반응 신뢰띠, 파선: 예측띠"
+xs   <- seq(min(fam$midparent), max(fam$midparent), length.out = 200)
+grid <- data.frame(midparent = xs)
+ci   <- predict(pa, grid, interval = "confidence")
+pi   <- predict(pa, grid, interval = "prediction")
+
+plot(fam$midparent, fam$child, pch = 19,
+     col = ifelse(fam$type == "FH", "red", adjustcolor("grey30", 0.6)),
+     xlab = "Midparent LDL", ylab = "Mean LDL of children",
+     ylim = range(c(pi, fam$child)), main = "Fitted Line Plot")
+abline(pa, col = "red", lwd = 2)
+lines(xs, ci[, "lwr"], lty = 2); lines(xs, ci[, "upr"], lty = 2)
+lines(xs, pi[, "lwr"], lty = 3); lines(xs, pi[, "upr"], lty = 3)
+legend("topleft", legend = c("fit", "CI for mean resp.", "Prediction Int."),
+       lty = c(1, 2, 3), col = c("red", "black", "black"), bty = "n")
+```
+
+- FH 가계는 예측띠 밖에 있음
+
+### 2.2 `predict()` — 새 값 넣어 보기
+
+- 부모 평균 LDL이 4.0 mmol/L인 가정의 자녀
+
+```{r}
+#| label: fam-predict
+newfam <- data.frame(midparent = 4.0)
+predict(pa, newfam, interval = "confidence")
+predict(pa, newfam, interval = "prediction")
+```
+
+- 신뢰구간 (3.00, 3.26) — 그런 가정들의 **평균**
+- 예측구간 (2.22, 4.04) — **한 가정**의 자녀 평균
+- 예측구간이 훨씬 넓음 → 한 가정을 먼저 뽑고 거기서 나올 수 있는 $Y$를 말하는 것이므로
+
+### 2.3 잔차 분석
+
+```{r}
+#| label: fam-resid
+#| fig-cap: "4 in 1 residual plot"
+#| fig-height: 6
+par(mfrow = c(2, 2))
+plot(fam$midparent, residuals(pa), xlab = "Midparent LDL",
+     ylab = "Residuals", main = "Versus Predictor")
+abline(h = 0, lty = 2)
+plot(fitted(pa), residuals(pa),
+     xlab = "Fitted values", ylab = "Residuals", main = "Versus Fits")
+abline(h = 0, lty = 2)
+qqnorm(residuals(pa)); qqline(residuals(pa), col = "red")
+hist(residuals(pa), nclass = 30, main = "Histogram of residuals",
+     xlab = "Residuals")
+```
+
+- 네 그림을 읽는 법
+  - **Versus Predictor** — 잔차가 $X$와 무관하게 random처럼 보이면 **linearity** 만족
+  - **Versus Fits** — 퍼진 정도가 일정하면 **constant variance**, 패턴 없으면 **uncorrelated error**
+  - **QQ-plot / Histogram** — **normality**
+- 여기서는 오른쪽 위 FH 가계 하나가 그림 전체를 지배
+
+### 2.4 영향점 — FH 가계 제외
+
+```{r}
+#| label: fam-influence
+## FH 가계의 leverage, 표준화잔차, Cook's distance
+k <- which(fam$type == "FH")
+c(leverage = hatvalues(pa)[[k]], mean_leverage = 2 / nrow(fam),
+  rstandard = rstandard(pa)[[k]], cook = cooks.distance(pa)[[k]])
+```
+
+- leverage가 평균의 15배, 표준화잔차 4.6, Cook's distance 1.13 (보통 1 넘으면 심각)
+
+```{r}
+#| label: fam-nofh
+newfam <- subset(fam, type != "FH")
+pn <- lm(child ~ midparent, data = newfam)
+summary(pn)$coefficients
+confint(pn)
+
+tn <- (coef(pn)[2] - 1) / summary(pn)$coefficients[2, 2]
+c(t = tn, p = 2 * pt(-abs(tn), df = df.residual(pn)),
+  R2 = summary(pn)$r.squared)
+```
+
+::: {.callout-important}
+- FH 가계 하나(전체의 0.3%)를 빼자
+  - $\hat\beta_1$: $0.571 \to 0.491$ — 유전율 추정치가 **16% 부풀려져 있었음**
+  - 95% CI $(0.382,\ 0.600)$ → 참값 0.5 포함
+  - $R^2$: $0.269 \to 0.209$ — 영향점이 있을 때 모형이 **오히려 더 좋아 보였음**
+- $H_0: \beta_1 = 1$은 여전히 기각 ($t = -9.20$) — 이 경우 결론은 유지
+- 단일유전자 가계가 다유전자 유전율을 왜곡 → 유전율 연구에서 FH 같은 가계를 따로 다루는 이유
+:::
+
+```{r}
+#| label: fam-nofh-resid
+#| fig-cap: "FH 가계 제외 후 잔차"
+#| fig-height: 6
+par(mfrow = c(2, 2))
+plot(newfam$midparent, residuals(pn), xlab = "Midparent LDL",
+     ylab = "Residuals", main = "Versus Predictor")
+abline(h = 0, lty = 2)
+plot(fitted(pn), residuals(pn),
+     xlab = "Fitted values", ylab = "Residuals", main = "Versus Fits")
+abline(h = 0, lty = 2)
+qqnorm(residuals(pn)); qqline(residuals(pn), col = "red")
+hist(residuals(pn), nclass = 30, main = "Histogram of residuals",
+     xlab = "Residuals")
+```
+
+- 네 가정 모두 대체로 성립
+
+::: {.callout-warning}
+## 자녀를 한 명씩 따로 쓰면
+- 자녀 900명을 각각 관측치로 넣어도 기울기는 같음
+- 그러나 같은 부모의 형제 3명은 **서로 독립이 아님** (같은 유전자·같은 식탁)
+- → 독립 가정이 깨져 표준오차가 실제보다 **작게** 나옴
+
+```{r}
+#| label: fam-child-level
+chx <- merge(ch, newfam[, c("fid", "midparent")])
+rbind(family_mean = summary(pn)$coef[2, 1:2],
+      each_child  = summary(lm(ldl ~ midparent,
+                               data = chx))$coef[2, 1:2])
+```
+
+- 0.055 → 0.048: 관측치가 3배가 된 것처럼 착각
+- 올바른 처리는 6-II의 혼합효과모형
+:::
+
+### 2.5 아버지와 어머니로 나누기
+
+- 부모 한 명에 대한 자녀의 회귀 기울기 이론값 = $h^2/2 = 0.25$
+  - 한 부모는 유전자의 절반만 물려주므로
+
+```{r}
+#| label: fam-split
+pf <- lm(child ~ father, data = newfam)
+pm <- lm(child ~ mother, data = newfam)
+tf <- (coef(pf)[2] - 0.25) / summary(pf)$coefficients[2, 2]
+tm <- (coef(pm)[2] - 0.25) / summary(pm)$coefficients[2, 2]
+
+rbind(
+  Father = c(b1 = coef(pf)[[2]], confint(pf)[2, ],
+             p_vs_0.25 = 2 * pt(-abs(tf[[1]]), df.residual(pf))),
+  Mother = c(b1 = coef(pm)[[2]], confint(pm)[2, ],
+             p_vs_0.25 = 2 * pt(-abs(tm[[1]]), df.residual(pm))))
+c(sum_of_two = coef(pf)[[2]] + coef(pm)[[2]],
+  midparent = coef(pn)[[2]])
+```
+
+::: {.callout-note}
+- 부모를 나누면
+  - **아버지**: $\hat\beta_1 = 0.234$ (95% CI 0.147~0.321)
+  - **어머니**: $\hat\beta_1 = 0.244$ (95% CI 0.168~0.320)
+  - 둘 다 이론값 0.25와 맞음 (p = 0.72, 0.88) → 부계·모계 전달에 차이 없음
+- 두 기울기의 합 0.478 ≈ 부모 평균의 기울기 0.491
+  - 부모가 서로 독립이고 분산이 비슷하면 수학적으로 거의 같아짐
+:::
+
+::: {.callout-warning}
+## 적합이 좋아진다고 결론이 좋아지는 것은 아니다
+- 잔차가 가장 큰 가계(F226)를 **아무 근거 없이** 하나 더 빼 보면
+
+```{r}
+#| label: fam-drop-nonreason
+kk <- which.max(abs(rstandard(pn)))
+newfam$fid[kk]
+pd <- lm(child ~ midparent, data = newfam[-kk, ])
+rbind(before = c(b1 = coef(pn)[[2]], sigma = summary(pn)$sigma,
+                 R2 = summary(pn)$r.squared),
+      after  = c(b1 = coef(pd)[[2]], sigma = summary(pd)$sigma,
+                 R2 = summary(pd)$r.squared))
+```
+
+- 잔차 표준오차 $0.441 \to 0.436$, $R^2$ $0.209 \to 0.212$ — 겉보기 적합은 개선
+- 그러나 기울기는 $0.491 \to 0.490$ — **새로 알게 된 것이 없음**
+- FH 가계는 **다른 기전**(단일유전자)이라는 근거가 있어서 뺀 것
+- 교훈: 이상치 제거는 "모형이 예뻐지니까" 하는 일이 아니라, 그 관측이 다른 메커니즘에서 왔다고 볼 근거가 있을 때 하는 일
+:::
+
+## 3. 중성지방과 BMI — 단일유전자 이상값
+
+### 3.1 문제 설정
+
+- 자료: KNU-Lipid 1500명의 중성지방(TG)과 BMI
+- 가정할 관계: BMI가 높을수록 TG도 높음 (잘 알려진 관계)
+- 질문: **TG가 유독 높은 한 사람이 그 관계로 설명되는가**
+
+```{r}
+#| label: load-tg
+gw <- read.csv("data/gwas_cohort.csv")
+ex <- read.csv("data/gwas_cohort_ext.csv")
+tg <- merge(gw[, c("iid", "age", "sex", "bmi")], ex, by = "iid")
+dim(tg)
+summary(tg$tg)
+```
+
+```{r}
+#| label: tg-raw
+#| fig-cap: "BMI와 중성지방 (원 척도)"
+plot(tg$bmi, tg$tg, pch = 20, col = adjustcolor("grey30", 0.5),
+     xlab = "BMI", ylab = "Triglyceride (mmol/L)",
+     main = "TG vs BMI")
+cor(tg$tg, tg$bmi)
+```
+
+- BMI가 늘면 TG도 증가
+- 다만 **아래는 촘촘하고 위로 길게 흩어짐** — 오른쪽으로 치우친 분포, BMI가 클수록 퍼짐이 커짐
+- 맨 위에 혼자 떨어진 점 하나
+
+### 3.2 로그 변환
+
+- TG는 곱셈적으로 변하는 양 (생화학적으로 대사 속도에 비례) → 로그
+
+```{r}
+#| label: tg-log
+#| fig-cap: "로그 변환 후"
+plot(tg$bmi, log(tg$tg), pch = 20, col = adjustcolor("grey30", 0.5),
+     xlab = "BMI", ylab = "log(Triglyceride)",
+     main = "log(TG) vs BMI")
+cor(log(tg$tg), tg$bmi)
+```
+
+```{r}
+#| label: tg-skew
+skew <- function(z) mean((z - mean(z))^3) / sd(z)^3
+c(skew_raw = skew(tg$tg), skew_log = skew(log(tg$tg)))
+
+## BMI 삼분위별 잔차 SD — 원 척도 vs 로그 척도
+t3 <- cut(tg$bmi, quantile(tg$bmi, 0:3 / 3), include.lowest = TRUE)
+rbind(raw = tapply(resid(lm(tg ~ bmi, data = tg)), t3, sd),
+      log = tapply(resid(lm(log(tg) ~ bmi, data = tg)), t3, sd))
+```
+
+- 왜도 $2.98 \to 0.06$ — 거의 대칭
+- 잔차 SD: 원 척도에서는 BMI가 클수록 커짐(0.59 → 0.87), 로그에서는 일정(약 0.40)
+- 상관계수는 $0.330 \to 0.359$로 조금 오름
+  - 원자료(대선)처럼 크게 오르지는 않음 — 여기서 로그의 효과는 주로 **정규성과 등분산**
+
+### 3.3 회귀와 잔차 분석
+
+```{r}
+#| label: tg-fit
+model <- lm(log(tg) ~ bmi, data = tg)
+summary(model)
+confint(model)
+exp(coef(model)[2]) - 1          # BMI 1 증가당 TG 변화율
+```
+
+- $\log(\widehat{TG}) = -0.682 + 0.0482 \times BMI$
+- $Y$만 로그인 모형 → 계수는 **변화율**로 해석
+  - BMI 1 증가 → TG 평균(기하평균) 약 **4.9%** 증가
+
+```{r}
+#| label: tg-resid
+#| fig-cap: "잔차 분석"
+#| fig-height: 6
+par(mfrow = c(2, 2))
+plot(tg$bmi, resid(model), main = "Predictors vs Residuals",
+     xlab = "BMI", ylab = "Residuals"); abline(h = 0, lty = 2)
+plot(fitted(model), resid(model), main = "Fitted vs Residuals",
+     xlab = "Fitted Values", ylab = "Residuals"); abline(h = 0, lty = 2)
+qqnorm(resid(model), main = "QQ-Plot of Residuals")
+qqline(resid(model), col = "red")
+hist(resid(model), nclass = 40, main = "Histogram of Residuals",
+     xlab = "Residuals")
+```
+
+- 선형성 — 확보됨
+- 등분산 — 확보됨
+- 정규성 — 대부분 직선 위, **큰 양의 이상치 하나**
+
+### 3.4 이 사람은 이상값인가
+
+- 절차
+  1. 표준화잔차가 가장 큰 사람을 **빼고** 모형 적합
+  2. 그 모형으로 그 사람의 TG를 예측
+  3. 실제 관측값이 예측구간 안에 들어오는지 확인
+
+```{r}
+#| label: tg-outlier
+k <- which.max(rstandard(model))
+tg[k, c("iid", "age", "sex", "bmi", "apoe", "tg")]
+rstandard(model)[[k]]
+
+model.red <- lm(log(tg) ~ bmi, data = tg[-k, ])
+summary(model.red)$coefficients
+
+newd <- data.frame(bmi = tg$bmi[k])
+pred_log <- predict(model.red, newd, interval = "prediction",
+                    level = 0.95)
+pred_log
+exp(pred_log)          # 원 척도로 되돌리기
+```
+
+```{r}
+#| label: tg-diff
+c(ratio_to_upper = tg$tg[k] / exp(pred_log[, "upr"]),
+  excess = tg$tg[k] - exp(pred_log[, "fit"]))
+```
+
+::: {.callout-important}
+## 결론
+- KL0719: BMI 23.0 (평범), TG **13.77 mmol/L**, 표준화잔차 5.5
+- 이 BMI에서의 예측값 약 **1.53**, 95% 예측구간 **(0.70, 3.32)**
+- 관측값은 예측구간 상한의 **4.1배**, 초과분 약 12.2 mmol/L
+- → 나머지 사람들과 **다른 모형에서 나온 것**으로 보아야 함
+- 실제 원인: **LPL(지단백 지질분해효소) 결핍** — 단일유전자 열성 질환, 가족성 킬로미크론혈증
+  - 원자료의 Palm Beach(나비형 투표용지)처럼 **다른 기전**이 작동한 한 단위
+- 임상적으로 TG > 10 mmol/L는 BMI로 설명할 수 없는 수준 → 유전자 검사 대상
+:::
+
+::: {.callout-note}
+- 로그 척도의 예측구간을 `exp()`로 되돌리면 **평균이 아니라 중앙값(기하평균)** 에 대한 구간
+- 로그 척도에서 대칭인 구간이 원 척도에서는 위로 긴 비대칭 구간이 됨 (0.70 ~ 1.53 ~ 3.32)
+:::
+
+```{r}
+#| label: tg-final
+#| fig-cap: "해당자 제외 모형과 실제 관측값(빨간 점)"
+plot(tg$bmi, log(tg$tg), pch = 20, col = adjustcolor("grey30", 0.4),
+     xlab = "BMI", ylab = "log(TG)", main = "KL0719 is off the line")
+abline(model.red, col = "blue", lwd = 2)
+points(tg$bmi[k], log(tg$tg[k]), col = "red", pch = 19, cex = 1.5)
+text(tg$bmi[k], log(tg$tg[k]), labels = "KL0719", pos = 4, col = "red")
+```

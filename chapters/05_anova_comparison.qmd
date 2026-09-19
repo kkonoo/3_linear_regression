@@ -1,0 +1,462 @@
+---
+title: "2-II. ANOVA: Multiple Comparison and Model Fit"
+description: "Tukey 다중비교, ANOVA의 모형 진단, ANOVA와 회귀의 관계 — 유전형별 LDL과 APOE별 중성지방"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="2-II. ANOVA: 다중비교와 모형적합">
+        <meta name="ai-context" content="
+        이 챕터는 ANOVA에서 F-검정 이후의 절차를 다룹니다.
+        F-검정이 유의하면 어느 집단끼리 다른지 알기 위해 쌍별 비교를 합니다.
+        여러 번 검정하면 1종 오류가 누적되므로 Tukey 방법으로 동시추론을 보정합니다.
+        t 분위수 대신 studentized range 분위수 q를 쓰는 것이 핵심 차이이며 q가 t보다 크므로 구간이 넓어집니다.
+        모형적합은 등분산, 독립성, 정규성 가정을 잔차 분석과 QQ-plot으로 점검합니다.
+        ANOVA에는 선형성 가정이 없는데 X가 범주형이기 때문입니다.
+        ANOVA는 설명변수가 범주형인 선형회귀의 특수한 경우이며, 범주형 변수를 더미변수로 바꾸면 회귀식이 됩니다.
+        절편이 있으면 k-1개, 없으면 k개의 더미변수를 씁니다.
+        첫 예제는 KNU-Lipid의 snp_LDLR 유전형(AA/AB/BB)별 LDL입니다. Tukey로 세 쌍이 모두 유의하며
+        차이는 AB-AA 0.240, BB-AA 0.831, BB-AB 0.591입니다. q/sqrt(2) = 2.35로 t = 1.96보다 약 20% 큽니다.
+        잔차 분석에서 BB군의 표준편차가 1.30으로 다른 군(0.68, 0.72)의 두 배인데, 1-II의 극단값 6명 때문입니다.
+        유전형 모형(ANOVA, 자유도 2)과 가법 모형(단순회귀, 자유도 1)을 비교하면 F = 12.43, p = 0.00044로
+        가법성이 깨진 것처럼 보이지만 이것도 그 6명 때문입니다(3-IV/V에서 확인).
+        사례 예제는 APOE 유전형 6종별 중성지방(TG)입니다. TG는 오른쪽으로 치우쳐 잔차 Shapiro p < 2e-16이고
+        로그 변환 후 p = 0.41입니다. log(TG)의 ANOVA는 F = 7.69 (5, 1493), p = 3.7e-7이며
+        Tukey 15쌍 중 6쌍이 유의합니다. e2/e2는 다른 모든 유전형보다 높습니다(제3형 고지단백혈증 경향).
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `2-II. (ANOVA) Basic Concepts and Estimation.docx`
+- 원자료의 성부별 키 → **유전형별 LDL** (2-I과 같은 자료)
+- 원자료의 암 종류별 생존일수(CancerStudy) → **APOE 유전형별 중성지방**
+- 데이터: `data/gwas_cohort.csv`, `data/gwas_cohort_ext.csv`
+:::
+
+```{r}
+#| label: setup
+#| include: false
+gw <- read.csv("data/gwas_cohort.csv")
+gw$geno <- factor(gw$snp_LDLR, levels = 0:2,
+                  labels = c("AA", "AB", "BB"))
+n <- table(gw$geno)
+geno.aov <- aov(ldl ~ geno, data = gw)
+```
+
+## 1. Comparing Pairs of Means
+
+- 출발점: F-검정이 유의함 → "적어도 하나는 다르다"까지만 알 수 있음
+- 다음 질문: **어느 집단끼리 다른가?**
+- → 쌍별 비교 (pairwise comparison)
+
+### 1.1 Tukey method
+
+- 가설: 두 평균의 차 = 0
+
+$$H_0: \mu_i - \mu_j = 0$$
+
+- 통계량: **studentized range statistic** $q$
+
+$$q = \frac{M_a - M_b}{\sqrt{MS_{within}/n}}$$
+
+- 분포: studentized range distribution
+- 신뢰구간 (Tukey HSD, Honest Significant Difference)
+
+$$(\hat\mu_i - \hat\mu_j) \ \pm\ q_{\alpha,\,k,\,N-k}
+\sqrt{\frac{MSE}{2}\left(\frac{1}{n_i} + \frac{1}{n_j}\right)}$$
+
+| 구성요소 | 의미 |
+|---|---|
+| $\hat\mu_i - \hat\mu_j$ | 평균 차이의 추정값 |
+| $q_{\alpha,k,N-k}$ | **studentized range** 분포의 $\alpha$ 분위수 |
+| $\sqrt{\cdot}$ | 추정량의 표준오차 |
+
+- 분산은 두 집단 분산의 합 → $MSE(1/n_i + 1/n_j)$ 형태
+
+### 1.2 t와 q의 차이 — 동시추론 보정
+
+- **$q > t$**
+  - $q$는 $t$에 $\sqrt{2}$ 정도를 더 곱한 형태
+  - → Tukey 구간이 보통의 t 구간보다 **넓음**
+- 이유: **multiplicity correction** (동시추론 보정)
+
+::: {.callout-important}
+## 왜 넓혀야 하는가
+- 신뢰구간을 여러 개 동시에 만들면 "전부 맞을" 확률이 떨어짐
+- 2개 비교: $(0.95)(0.95) \approx 0.90$
+- 3개 비교: $(0.95)(0.95)(0.95) \approx 0.86$
+- $k$개 집단 → $\binom{k}{2}$개 비교 → 그냥 두면 1종 오류가 누적
+- → 각 구간을 넓혀서 **family-wise** 신뢰수준을 95%로 맞춤
+:::
+
+```{r}
+#| label: q-vs-t
+mse <- summary(geno.aov)[[1]][["Mean Sq"]][2]
+k <- nlevels(gw$geno); N <- nrow(gw)
+
+q <- qtukey(0.95, nmeans = k, df = N - k)
+t <- qt(0.975, df = N - k)
+c(q = q, q_over_sqrt2 = q / sqrt(2), t = t)
+```
+
+- $q/\sqrt{2} = 2.35$ vs $t = 1.96$
+- → 같은 자료에서도 Tukey 구간이 약 20% 넓음
+- 집단이 3개뿐이라 보정이 크지 않음 — 집단이 많을수록 차이가 커짐 (§4의 6개 집단)
+
+### 1.3 예제 — 유전형별 LDL
+
+```{r}
+#| label: tukey-geno
+TukeyHSD(geno.aov, conf.level = 0.95)
+```
+
+```{r}
+#| label: tukey-plot
+#| fig-cap: "Tukey 95% family-wise 신뢰구간 (0을 포함하면 유의하지 않음)"
+#| fig-height: 3.5
+par(mar = c(4, 6, 3, 1))
+plot(TukeyHSD(geno.aov, conf.level = 0.95), las = 1)
+```
+
+- 읽는 법: 신뢰구간이 **0을 포함하면** 두 집단 평균이 다르다고 할 수 없음
+
+| 비교 | diff | 95% 동시 신뢰구간 | p adj | 판정 |
+|---|---|---|---|---|
+| AB − AA | 0.240 | (0.144, 0.337) | < 0.0001 | 유의 |
+| BB − AA | 0.831 | (0.651, 1.012) | < 0.0001 | 유의 |
+| BB − AB | 0.591 | (0.406, 0.776) | < 0.0001 | 유의 |
+
+- 해석
+  - 세 쌍 모두 유의 → 위험 대립유전자 수에 따라 LDL이 단계적으로 높아짐
+  - 참값으로는 대립유전자 하나당 0.28씩 → AB−AA와 BB−AB 모두 0.28이어야 함
+  - 그런데 BB−AB가 0.59로 두 배 → §2의 잔차 분석과 §3에서 이유를 봄
+
+```{r}
+#| label: tukey-manual
+## 공식으로 직접 계산 — BB vs AA
+mu <- tapply(gw$ldl, gw$geno, mean)
+hw <- q * sqrt(mse/2 * (1/n[["BB"]] + 1/n[["AA"]]))
+c(diff = mu[["BB"]] - mu[["AA"]],
+  lwr  = mu[["BB"]] - mu[["AA"]] - hw,
+  upr  = mu[["BB"]] - mu[["AA"]] + hw)
+```
+
+## 2. Model Fit Assessment
+
+### 2.1 모형과 가정
+
+- **Data**: $k$개 population에서 온 $Y_{ij}$, $j = 1,\ldots,n_i$; $i = 1,\ldots,k$
+- **Model**
+
+$$Y_{ij} = \mu_i + \varepsilon_{ij} = \mu + \tau_i + \varepsilon_{ij},
+\qquad \sum_{i=1}^{k}\tau_i = 0$$
+
+- $\mu_i$ = $i$번째 집단 평균, $\mu_i = \mu + \tau_i$로 분해
+  - $\mu$ = 전체 평균
+  - $\tau_i$ = $i$번째 집단의 효과(treatment effect)
+
+- **Assumptions** — 선형회귀의 네 가정 중 **linearity만 빠짐**
+
+| 가정 | 식 |
+|---|---|
+| Constant variance | $\mathrm{Var}(\varepsilon_{ij}) = \sigma^2$ |
+| Independence | $\{\varepsilon_{ij}\}$ are independent random variables |
+| Normality | $\varepsilon_{ij} \sim$ Normal |
+
+::: {.callout-note}
+## 왜 선형성 가정이 없는가
+- $X$가 범주형이기 때문
+- 범주에는 순서도 간격도 없음 → "선형 관계"라는 말 자체가 성립하지 않음
+:::
+
+### 2.2 잔차 분석
+
+$$\hat\varepsilon_{ij} = Y_{ij} - \bar Y_{i\cdot}$$
+
+- 점검 항목
+  - 0 근처에 randomly scattered → 등분산·독립성
+  - QQ-plot & histogram of $\hat\varepsilon_{ij}$ → 정규성
+- 가정에 안 맞으면 → **데이터 변환**
+
+```{r}
+#| label: resid-geno
+#| fig-cap: "유전형 자료의 잔차 진단"
+#| fig-height: 6
+par(mfrow = c(2, 2))
+set.seed(1)
+plot(jitter(fitted(geno.aov), 0.3), residuals(geno.aov), pch = 20,
+     cex = 0.5, main = "Fitted vs Residuals",
+     xlab = "Fitted values", ylab = "Residuals")
+abline(h = 0, lty = 2, col = "red")
+plot(residuals(geno.aov), pch = 20, cex = 0.5, xlab = "Order",
+     ylab = "Residuals", main = "Order vs Residuals")
+abline(h = 0, lty = 2, col = "red")
+qqnorm(residuals(geno.aov), pch = 20, cex = 0.5)
+qqline(residuals(geno.aov), col = "red")
+hist(residuals(geno.aov), nclass = 40, xlab = "Residuals",
+     main = "Histogram of residuals")
+```
+
+```{r}
+#| label: resid-sd-geno
+## 집단별 잔차 표준편차 — 등분산 점검
+round(tapply(residuals(geno.aov), gw$geno, sd), 3)
+## 1-II에서 표시한 6명을 빼면
+top6 <- order(residuals(geno.aov), decreasing = TRUE)[1:6]
+gw$geno[top6]
+round(tapply(residuals(geno.aov)[-top6], gw$geno[-top6], sd), 3)
+```
+
+- Order vs Residuals: 패턴 없음 → 독립성 양호
+- 그러나
+  - BB군의 잔차 SD가 1.30 — 다른 두 군(0.68, 0.72)의 **두 배** → 등분산 위배
+  - QQ-plot 오른쪽 끝의 극단값 → 정규성 위배
+- 원인은 모두 **1-II에서 표시한 6명** (전원 BB)
+  - 이들을 빼면 BB의 SD는 0.71로 다른 군과 같아짐
+  - 이들이 누구인지는 3-III에서 밝힘
+
+## 3. One-way ANOVA vs. Simple Linear Regression
+
+### 3.1 ANOVA = 범주형 X의 회귀
+
+- **ANOVA는 선형회귀의 특수한 경우**
+  - 조건: 설명변수 $X$가 범주형
+  - 이때 $Y$의 추정량 = 각 집단의 평균
+
+### 3.2 두 방법의 비교
+
+| | Simple Linear Regression | ANOVA |
+|---|---|---|
+| Data | $\{(x_1,Y_1),\ldots,(x_n,Y_n)\}$ | $Y_{ij}$, $j=1,\ldots,n_i$; $i=1,\ldots,k$ |
+| Model | $Y_i = \beta_0 + \beta_1 x_i + \varepsilon_i$ | $Y_{ij} = \mu + \tau_i + \varepsilon_{ij}$ |
+| $X$ | 연속형 | 범주형 |
+| $\hat Y$ | 회귀직선 위의 값 | 해당 집단의 평균 |
+
+### 3.3 ANOVA를 회귀식으로 표현하기
+
+- 범주형 $X$ → **더미변수(dummy variable)** 로 변환
+  - $x_1 = (1,\ldots,1,0,0,\ldots,0)^T$, …, $x_k = (0,0,\ldots,1,\ldots,1)^T$
+
+::: {.callout-important}
+## 더미변수 개수
+- **절편이 있는 모형** → $k-1$개만 사용
+  - 이유: $(1,1,\ldots,1)^T = x_1 + x_2 + \cdots + x_k$ → **선형종속**
+  - $Y_i = \beta_0 + \beta_1 x_{i1} + \cdots + \beta_{k-1} x_{i,k-1} + \varepsilon_i$
+- **절편이 없는 모형** → $k$개 전부 사용
+  - $Y_i = \beta_1 x_{i1} + \beta_2 x_{i2} + \cdots + \beta_k x_{ik} + \varepsilon_i$
+:::
+
+- 행렬로 쓰면 ($k=3$, $N=7$인 예 — AA 3명, AB 2명, BB 2명)
+
+$$\begin{bmatrix} y_1 \\ y_2 \\ y_3 \\ y_4 \\ y_5 \\ y_6 \\ y_7 \end{bmatrix}
+=
+\begin{bmatrix}
+1 & 0 & 0 \\ 1 & 0 & 0 \\ 1 & 0 & 0 \\
+0 & 1 & 0 \\ 0 & 1 & 0 \\
+0 & 0 & 1 \\ 0 & 0 & 1
+\end{bmatrix}
+\begin{bmatrix} \mu_1 \\ \mu_2 \\ \mu_3 \end{bmatrix}
++
+\begin{bmatrix} \varepsilon_1 \\ \varepsilon_2 \\ \varepsilon_3 \\ \varepsilon_4 \\ \varepsilon_5 \\ \varepsilon_6 \\ \varepsilon_7 \end{bmatrix}$$
+
+- 설계행렬 × 모수벡터 형태로 깔끔하게 표현됨
+- → **다중회귀와 ANOVA가 같은 틀**임을 보여 줌 (Part 3에서 본격적으로 다룸)
+
+```{r}
+#| label: anova-as-lm
+## aov() 와 lm() 은 같은 모형
+fit.lm <- lm(ldl ~ geno, data = gw)
+anova(fit.lm)
+```
+
+```{r}
+#| label: dummy-coding
+## R이 자동으로 만든 더미변수 (기준 범주 = AA)
+head(model.matrix(fit.lm), 3)
+coef(fit.lm)
+```
+
+- 해석
+  - `(Intercept)` = 기준 범주(AA)의 평균 2.938
+  - 나머지 계수 = **기준 범주 대비 차이**
+  - 예: `genoBB` = BB 평균 − AA 평균 = 0.831 (Tukey의 diff와 동일)
+
+```{r}
+#| label: no-intercept
+## 절편을 빼면 k개 더미 → 계수가 곧 각 집단 평균
+coef(lm(ldl ~ geno - 1, data = gw))
+tapply(gw$ldl, gw$geno, mean)
+```
+
+#### 유전형 모형 vs 가법 모형
+
+- 같은 유전형을 두 가지로 넣을 수 있음
+
+| | 가법 모형 (1-I) | 유전형 모형 (이 장) |
+|---|---|---|
+| $X$ | 0/1/2 숫자 하나 | 더미 2개 |
+| 모형 | $\beta_0 + \beta_1 x$ — **직선** | 세 집단 평균 각각 |
+| 자유도 | 1 | 2 |
+| 가정 | AA→AB와 AB→BB의 증가폭이 같음 | 가정 없음 |
+
+- 가법 모형은 유전형 모형의 **축소모형** → 두 모형의 차이를 F-검정
+
+```{r}
+#| label: additive-vs-genotypic
+add.lm <- lm(ldl ~ snp_LDLR, data = gw)
+rbind(additive  = predict(add.lm, data.frame(snp_LDLR = 0:2)),
+      genotypic = tapply(gw$ldl, gw$geno, mean))
+anova(add.lm, fit.lm)
+```
+
+- $F = 12.43$, p $= 0.00044$ → 가법 모형이 기각되는 것처럼 보임
+  - 직선은 BB 평균(3.770)을 3.585로 과소추정
+- 그러나 이것도 **BB군의 극단값 6명** 때문
+  - 3-IV/V에서 이들을 빼고 공변량을 보정해 다시 검정하면 $F = 0.056$ (p $= 0.81$) → 가법 모형으로 충분
+- GWAS가 기본으로 가법 모형을 쓰는 이유: 자유도 1로 검정력이 높고, 대부분의 변이에서 잘 맞음
+
+## 4. Data Example — APOE와 중성지방
+
+### 4.1 데이터
+
+- $Y$ = 중성지방 TG (mmol/L)
+- $X$ = **APOE 유전형** — 대립유전자 e2/e3/e4의 조합 6종 → **반드시 factor**
+  - e3/e3이 가장 흔함, e2/e2는 드묾 (제3형 고지단백혈증 경향)
+- 1-III에서 찾은 LPL 결핍 1명(KL0719)은 다른 기전이므로 제외
+
+```{r}
+#| label: load-apoe
+gw <- read.csv("data/gwas_cohort.csv")
+ex <- read.csv("data/gwas_cohort_ext.csv")
+ap <- merge(gw[, c("iid", "bmi")], ex, by = "iid")
+ap <- subset(ap, lpl_def == 0)
+ap$apoe <- factor(ap$apoe)
+dim(ap)
+table(ap$apoe)
+```
+
+- 집단 크기가 8명(e2/e2)부터 974명(e3/e3)까지 매우 불균형
+
+### 4.2 반응변수의 변환
+
+::: {.callout-important}
+## 선형회귀와 다른 점
+- 선형회귀: **오차 $\varepsilon$** 이 정규분포라고 가정
+- ANOVA: 각 집단의 **$Y$ 자체**가 정규분포라고 가정
+- → $Y$의 분포를 직접 확인하고, 필요하면 변환
+:::
+
+```{r}
+#| label: tg-hist
+#| fig-cap: "중성지방 원 척도 vs 로그 척도"
+#| fig-height: 3.5
+par(mfrow = c(1, 2))
+hist(ap$tg, nclass = 40, main = "TG", xlab = "Triglyceride (mmol/L)")
+hist(log(ap$tg), nclass = 40, main = "log(TG)", xlab = "log(Triglyceride)")
+```
+
+- 원 척도: 오른쪽으로 심하게 치우침 (right-skewed)
+- 로그 변환: 종 모양에 가까워짐
+
+```{r}
+#| label: tg-shapiro
+## 잔차의 정규성 검정으로 확인
+shapiro.test(residuals(aov(tg ~ apoe, data = ap)))
+shapiro.test(residuals(aov(log(tg) ~ apoe, data = ap)))
+```
+
+- 원 척도: p-value $< 2.2\times10^{-16}$ → 정규성 기각
+- 로그 척도: p-value $= 0.41$ → 정규성 유지
+- → **로그 변환 후 분석**
+
+```{r}
+#| label: apoe-boxplot
+#| fig-cap: "APOE 유전형별 로그 중성지방"
+ap$logtg <- log(ap$tg)
+boxplot(logtg ~ apoe, data = ap, col = "#dce6f2",
+        xlab = "APOE genotype", ylab = "log(Triglyceride)")
+```
+
+### 4.3 ANOVA
+
+```{r}
+#| label: apoe-anova
+model <- aov(logtg ~ apoe, data = ap)
+summary(model)
+model.tables(model, type = "means")
+```
+
+- $F = 7.69$, p-value $= 3.7\times10^{-7}$
+- → APOE 유전형에 따라 평균 로그 TG가 **다름**
+- 집단별 평균(log): e2/e2 1.231 > e4/e4 0.761 > e3/e4 0.508 ≈ e2/e4 0.493 ≈ e3/e3 0.463 ≈ e2/e3 0.457
+
+```{r}
+#| label: apoe-truth
+## 참값과 비교: e3/e3 대비 차이 (로그 척도)
+mu  <- tapply(ap$logtg, ap$apoe, mean)
+est <- mu - mu[["e3/e3"]]
+tru <- c("e2/e2" = 0.70, "e2/e3" = 0.05, "e2/e4" = 0.15,
+         "e3/e3" = 0, "e3/e4" = 0.10, "e4/e4" = 0.20)
+round(rbind(n = table(ap$apoe), estimate = est, truth = tru[names(est)]),
+      3)
+```
+
+- 큰 효과(e2/e2 +0.70)는 8명으로도 잘 추정됨 (0.768)
+- 작은 효과(e2/e3 +0.05, e3/e4 +0.10)는 추정치가 참값보다 작게 흔들림 — 효과에 비해 오차 SD(0.38)가 큼
+
+### 4.4 Tukey test
+
+```{r}
+#| label: apoe-tukey
+round(TukeyHSD(model, conf.level = 0.95)[[1]], 4)
+```
+
+- 유의한 쌍 (p adj < 0.05) — 15쌍 중 6쌍
+  - **e2/e2 vs e2/e3, e2/e4, e3/e3, e3/e4** — e2/e2가 네 유전형보다 높음 (차이 0.72~0.77)
+  - **e4/e4 − e3/e3** (0.297, p = 0.017), **e4/e4 − e2/e3** (0.304, p = 0.020)
+- e2/e2 vs e4/e4는 차이 0.47인데도 유의하지 않음 (p = 0.076) — 두 집단 모두 작음 (8명, 21명)
+
+::: {.callout-warning}
+- 전체 F-검정은 매우 유의했지만(p = $3.7\times10^{-7}$), 쌍별로 보면 6쌍만 유의
+- 원인
+  - Tukey는 동시추론 보정으로 구간이 넓음 — 집단 6개 → 15쌍
+  - 일부 집단의 표본 크기가 작음 (e2/e2 $n=8$, e4/e4 $n=21$, e2/e4 $n=28$)
+- 참 효과가 있는 e3/e4 (+0.10)도 유의하지 않음 — **유의하지 않음 ≠ 효과 없음**
+- → 전체 검정과 쌍별 검정의 결론이 다를 수 있음은 정상
+:::
+
+### 4.5 잔차 분석
+
+```{r}
+#| label: apoe-resid
+#| fig-cap: "APOE 자료의 잔차 진단"
+#| fig-height: 6
+par(mfrow = c(2, 2))
+qqnorm(residuals(model), pch = 20, cex = 0.5)
+qqline(residuals(model), col = "red")
+hist(residuals(model), nclass = 40, main = "Histogram of residuals",
+     xlab = "Residuals")
+plot(residuals(model), pch = 20, cex = 0.5, xlab = "Order",
+     ylab = "Residuals", main = "Order vs Residuals")
+abline(h = 0, lty = 1, col = "red")
+set.seed(1)
+plot(jitter(fitted(model), 0.3), residuals(model), pch = 20, cex = 0.5,
+     xlab = "Fitted values", ylab = "Residuals",
+     main = "Fitted vs Residuals")
+abline(h = 0, lty = 1, col = "red")
+```
+
+- QQ-plot·히스토그램: 로그 변환 후 정규성 양호
+- Fitted vs Residuals: 집단별 산포가 비슷 → 등분산 양호
+- Order vs Residuals: 패턴 없음 → 독립성 양호
+- → **모형 가정이 대체로 성립**
+
+::: {.callout-note}
+- 이 ANOVA는 BMI·성별 등 TG에 영향을 주는 다른 변수를 넣지 않음
+  - APOE 유전형은 이들과 무관하게 정해지므로(멘델 무작위화) 평균 비교 자체는 치우치지 않음
+  - 다만 그 변수들의 변동이 오차에 섞여 검정력이 떨어짐 → 다중회귀(Part 3)로 보정
+- 실제로 APOE는 LDL에도 강한 영향(e4↑, e2↓)이 있으나, 이 가상 코호트에서는 TG에만 넣었음
+:::

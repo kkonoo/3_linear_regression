@@ -1,0 +1,394 @@
+---
+title: "1-II. Simple Linear Regression: Prediction and Model Evaluation"
+description: "회귀선 추정과 예측, 잔차 진단, 이상치와 설명력 — 유전형으로 LDL 예측하기"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="1-II. 단순선형회귀: 예측과 모형평가">
+        <meta name="ai-context" content="
+        이 챕터는 단순선형회귀의 예측과 모형평가를 다룹니다.
+        estimation(평균 반응의 추정)과 prediction(새 관측치의 예측)은 다릅니다.
+        예측구간(prediction interval)은 신뢰구간(confidence interval)보다 항상 넓은데,
+        새 관측치의 오차 분산 sigma^2가 추가로 더해지기 때문입니다.
+        예제는 KNU-Lipid 코호트의 LDL ~ snp_LDLR 유전형 회귀입니다.
+        위험 대립유전자 2개(BB)인 사람들의 평균 LDL 95% 신뢰구간은 (3.49, 3.68)로 좁지만,
+        BB인 한 사람의 LDL 95% 예측구간은 (2.10, 5.07)로 넓습니다. 유전형 하나로 개인을 예측하기는 어렵습니다.
+        R^2 = 0.072로, p-value가 1e-26이어도 설명력은 7%입니다. 유의성과 예측력은 다릅니다.
+        진단은 잔차 분석으로 합니다: 잔차 산점도로 선형성과 등분산을, QQ-plot과 히스토그램으로 정규성을 봅니다.
+        이상치는 outlier, leverage point, influential point로 구분하며 표준화잔차로 찾습니다.
+        n이 크면 |r|>2는 5%쯤 나오는 것이 정상이므로 기준을 표본크기에 맞춰야 합니다.
+        이 자료에서는 표준화잔차 4.6~7.9인 6명이 있으며 모두 유전형 BB입니다. 정체는 3-III에서 밝혀집니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `1-II. (Simple) Prediction and model evaluation.docx`
+- 원자료의 meddcor를 KNU-Lipid 코호트로 교체 (1-I과 같은 모형)
+- 데이터: `data/gwas_cohort.csv`
+:::
+
+```{r}
+#| label: setup
+#| include: false
+gw <- read.csv("data/gwas_cohort.csv")
+model <- lm(ldl ~ snp_LDLR, data = gw)
+```
+
+## 1. Regression Line Estimation and Prediction
+
+### 1.1 Estimation vs. Prediction
+
+- 회귀의 목적을 두 가지로 구분
+- 말은 비슷하지만 **불확실성의 크기가 다름**
+
+| | Estimation | Prediction |
+|---|---|---|
+| predictor $x^*$ | 이미 관측된 값 중 하나 | 새 관측 (new observation) |
+| response | **모든** setting에 대한 **평균** 반응의 추정 | **하나**의 setting에서 나올 반응의 예측 |
+| uncertainty | estimation의 불확실성 | estimation의 불확실성 **+ 새 관측치 자체의 불확실성** |
+
+::: {.callout-important}
+- 같은 $x^*$에서도 **예측구간이 신뢰구간보다 항상 넓음**
+- 이유: 새 관측치의 오차 분산 $\sigma^2$이 한 번 더 더해짐
+:::
+
+### 1.2 회귀선의 추정
+
+#### 추정량의 분포
+
+$$\hat y \mid x^* = \hat\beta_0 + \hat\beta_1 x^*$$
+
+- $\hat\beta_0, \hat\beta_1$이 정규분포 → $\hat y$도 정규분포
+- 평균과 분산만 알면 추론이 끝남
+
+$$E(\hat y \mid x^*) = \beta_0 + \beta_1 x^*$$
+
+$$\mathrm{Var}(\hat y \mid x^*) = \sigma^2\left(\frac{1}{n} + \frac{(x^* - \bar x)^2}{S_{xx}}\right)$$
+
+::: {.callout-tip}
+- 분산 식의 둘째 항: **$x^*$가 $\bar x$에서 멀어질수록 불확실성 증가**
+- → 회귀선의 신뢰띠가 가운데가 좁고 양끝이 벌어지는 나비넥타이 모양
+:::
+
+#### 평균 반응에 대한 신뢰구간
+
+$$\hat y \mid x^* \ \pm\ t_{\alpha/2,\,n-2}
+\sqrt{\hat\sigma^2\left(\frac{1}{n} + \frac{(x^* - \bar x)^2}{S_{xx}}\right)}$$
+
+- $\sigma^2$ 자리에 $MSE$를 넣었으므로 z가 아니라 t
+
+### 1.3 예측
+
+#### 새 관측치의 예측
+
+- 불확실성 = ($\beta_0, \beta_1$ 추정의 불확실성) + ($n+1$번째 새 관측치의 불확실성)
+
+$$\sigma^2\left(\frac{1}{n} + \frac{(x^* - \bar x)^2}{S_{xx}}\right) + \boxed{\sigma^2}
+= \sigma^2\left(1 + \frac{1}{n} + \frac{(x^* - \bar x)^2}{S_{xx}}\right)$$
+
+#### 예측구간
+
+$$(\hat\beta_0 + \hat\beta_1 x^*) \ \pm\ t_{\alpha/2,\,n-2}
+\sqrt{\hat\sigma^2\left(\boxed{1} + \frac{1}{n} + \frac{(x^* - \bar x)^2}{S_{xx}}\right)}$$
+
+- 신뢰구간 식과의 차이: **딱 $1$ 하나가 더 들어간 것**
+- 그 $1$이 새 관측치의 분산
+
+## 2. Data Example I — Regression Line Estimation and Prediction
+
+- 위험 대립유전자 2개(BB), 즉 $x^* = 2$인 사람의 LDL을 추정·예측
+- 두 질문을 구분
+  - **Estimation**: BB인 사람들의 **평균** LDL은?
+  - **Prediction**: BB인 **한 사람**의 LDL은?
+
+```{r}
+#| label: predict-point
+newdata <- data.frame(snp_LDLR = 2)
+predict(model, newdata)
+```
+
+- $2.9136 + 2 \times 0.3356 = 3.585$ mmol/L
+
+- 두 분산을 공식으로 직접 계산
+
+```{r}
+#| label: predict-var
+x    <- gw$snp_LDLR
+n    <- nrow(gw)
+xbar <- mean(x)
+Sxx  <- sum((x - xbar)^2)
+mse  <- summary(model)$sigma^2
+
+c(mean_resp = mse * (1/n + (2 - xbar)^2 / Sxx),       # 평균 반응
+  new_obs   = mse * (1 + 1/n + (2 - xbar)^2 / Sxx))   # 새 관측치
+```
+
+- 새 관측치의 분산이 평균 반응 분산의 약 **230배**
+- 거의 전부가 식의 $1$, 즉 $\sigma^2$에서 옴
+
+```{r}
+#| label: predict-intervals
+## 예측구간 (prediction)
+predict(model, newdata, interval = "prediction", level = 0.99)
+predict(model, newdata, interval = "prediction", level = 0.95)
+
+## 신뢰구간 (confidence)
+predict(model, newdata, interval = "confidence", level = 0.99)
+predict(model, newdata, interval = "confidence", level = 0.95)
+```
+
+| | 99% | 95% |
+|---|---|---|
+| **Prediction** interval | (1.63, 5.54) | (2.10, 5.07) |
+| **Confidence** interval | (3.46, 3.71) | (3.49, 3.68) |
+
+- 신뢰구간 < 예측구간
+- 예측구간에는 새 관측치의 변동이 추가로 들어가기 때문
+
+::: {.callout-important}
+## 유전형으로 한 사람을 예측할 수 있는가
+- BB인 사람들의 **평균** LDL은 0.2 mmol/L 폭 안에서 정확히 앎
+- BB인 **한 사람**의 LDL은 2.1~5.1 — 사실상 LDL의 정상~고위험 범위 전체
+- 이유: LDL을 정하는 것은 이 SNP 하나가 아니라 나이·성별·체중·수많은 다른 유전자·생활습관
+- → "집단 평균의 차이는 확실하나, 개인 예측력은 약함" — GWAS 결과를 해석할 때 늘 기억할 것
+:::
+
+```{r}
+#| label: plot-bands
+#| fig-cap: "적합선과 신뢰띠(점선)·예측띠(파선) — 점은 옆으로 흩뜨려 그림"
+xs   <- seq(0, 2, length.out = 100)
+grid <- data.frame(snp_LDLR = xs)
+ci   <- predict(model, grid, interval = "confidence")
+pi   <- predict(model, grid, interval = "prediction")
+
+set.seed(1)
+plot(jitter(gw$snp_LDLR, 0.6), gw$ldl, pch = 20, cex = 0.5,
+     col = adjustcolor("grey40", 0.5), xaxt = "n",
+     xlab = "snp_LDLR", ylab = "LDL (mmol/L)", main = "Fitted Line Plot")
+axis(1, at = 0:2)
+abline(model, col = "red", lwd = 2)
+lines(xs, ci[, "lwr"], lty = 2); lines(xs, ci[, "upr"], lty = 2)
+lines(xs, pi[, "lwr"], lty = 3); lines(xs, pi[, "upr"], lty = 3)
+legend("topleft", legend = c("fit", "CI for mean resp.", "Prediction Int."),
+       lty = c(1, 2, 3), col = c("red", "black", "black"), bty = "n")
+```
+
+- 신뢰띠는 직선에 거의 붙어 있음 ($n = 1500$)
+- 예측띠 밖에 떨어진 점들이 위쪽에 몇 개 → §5에서 확인
+
+## 3. Diagnostics
+
+### 3.1 단순선형회귀 복습
+
+- **Data**: bivariate $\{(x_1, Y_1), \ldots, (x_n, Y_n)\}$
+- **Model**: $Y_i = \beta_0 + \beta_1 x_i + \varepsilon_i,\ i = 1,\ldots,n$
+- **Assumptions**
+  - *Linearity / Mean Zero*: $E(\varepsilon_i) = 0$
+  - *Constant Variance*: $\mathrm{Var}(\varepsilon_i) = \sigma^2$
+  - *Independence*: $\{\varepsilon_1, \ldots, \varepsilon_n\}$ are independent random variables
+  - *Normality*: $\varepsilon_i \sim$ Normally Distributed
+
+### 3.2 잔차 분석
+
+$$e_i = \hat\varepsilon_i = Y_i - (\hat\beta_0 + \hat\beta_1 x_i)$$
+
+- **잔차가 어떻게 생겼는가로 모형을 판단**
+- 정상: 잔차가 0 주변에 아무 패턴 없이 흩어짐
+- 이상: 직선 근처에 퍼져 있지 않고 무언가 몰려 있음 → random이 아니라는 신호
+
+| 잔차 그림에서 보이는 것 | 깨진 가정 |
+|---|---|
+| 곡선 패턴 (U자, 역U자) | **Linearity** — $X$와 $Y$가 선형이 아님 |
+| 부채꼴로 벌어짐 | **Constant variance** — 분산이 $X$에 따라 변함 |
+| 뭉치(cluster)·연속된 같은 부호 | **Independence** — 오차가 서로 상관 |
+
+::: {.callout-note}
+- 잔차 분석으로 따지는 것은 사실 **uncorrelation**
+- independence 자체는 사람 데이터를 무작위로 모았다면 설계 단계에서 확보되는 편
+:::
+
+### 3.3 정규성 가정 — QQ-plot과 히스토그램
+
+- normal probability plot의 축
+  - $x$축 = 정규분포 상에서 기대되는 분위수
+  - $y$축 = 실제 잔차
+- 잔차가 정규분포라면 직선 위에 놓임
+
+| 모양 | 분포 | 히스토그램 |
+|---|---|---|
+| 직선에 딱 맞음 | **정규** | 종 모양 |
+| **C자형** | right-skewed (양의 왜도) | 한쪽으로 쏠림 — 예상보다 작은 잔차가 많음 |
+| **S자형** | uniform | 양 꼬리가 정규보다 얇음 |
+
+```{r}
+#| label: qq-shapes
+#| fig-cap: "정규 / 치우침 / 균등 — QQ-plot의 세 가지 전형"
+#| fig-height: 3
+set.seed(1)
+z <- rnorm(200); e <- rexp(200); u <- runif(200)
+par(mfrow = c(1, 3))
+qqnorm(z, main = "Normal");            qqline(z, col = "red")
+qqnorm(e, main = "Right-skewed (C자)"); qqline(e, col = "red")
+qqnorm(u, main = "Uniform (S자)");      qqline(u, col = "red")
+```
+
+### 3.4 변수변환
+
+- 잔차 분석 결과 여러 가정에 안 맞는다면
+- → $Y$를 변형하면 선형회귀가 가능해지는 경우가 많음
+- 대표적인 것: **Box-Cox 변환**
+
+$$Y^{(\lambda)} =
+\begin{cases}
+\dfrac{Y^{\lambda} - 1}{\lambda}, & \lambda \neq 0 \\[6pt]
+\log Y, & \lambda = 0
+\end{cases}$$
+
+- $\lambda = 0$ → 로그 변환
+- $\lambda = 1/2$ → 제곱근 변환
+- Part 1-III 중성지방(TG) 자료에서 로그 변환의 효과를 확인
+
+## 4. Outliers and Predictive Power
+
+### 4.1 회귀에서의 이상치
+
+| 종류 | 정의 |
+|---|---|
+| **Outlier** | 데이터 다수에서 멀리 떨어진 점 ($X$나 $Y$ 둘 중 하나) |
+| **Leverage point** | $\bar x$에서 멀리 떨어진 점. 보통 $2 \times s.d.$ 이상 |
+| **Influential point** | $\bar x$와 $\bar y$ **둘 다**에서 멀리 떨어진 점 — 제일 문제 |
+
+- leverage가 크다고 반드시 나쁜 것은 아님
+- 회귀선을 실제로 끌고 가는 것은 influential point
+
+### 4.2 이상치 점검
+
+#### 표준화잔차 (standardized residuals)
+
+$$r_i^* = \frac{y_i - \hat y_i}{\sqrt{MSE}}$$
+
+- $MSE$를 그냥 $y$의 분산과 같다고 보고 나눈 것
+- 판정 기준: $|r_i^*| > 2$ (기준을 1로 잡는 경우도 있음)
+- R 함수
+  - `rstandard()` — 표준화잔차
+  - `car::outlierTest()` — 검정
+
+### 4.3 설명력 (predictive power)
+
+#### 결정계수 (coefficient of determination)
+
+$$R^2 = \frac{SSR}{SST} = 1 - \frac{SSE}{SST}$$
+
+- 전체 $Y$의 변동 중 회귀(fitted value)로 설명되는 비율
+- 달리 말하면: *fitted로 예측하나 실제값으로 예측하나 비슷한 정도*
+
+#### 상관계수
+
+$$\rho = \mathrm{cor}(X, Y)
+= \frac{\sum y_i (x_i - \bar x)}{\sqrt{\sum (x_i - \bar x)^2}\sqrt{\sum(y_i - \bar y)^2}}
+= \frac{S_{XY}}{\sqrt{S_{XX}}\sqrt{S_{YY}}}
+= \hat\beta_1 \sqrt{\frac{S_{XX}}{S_{YY}}}$$
+
+- 유도
+  - $\hat\beta_1 = S_{XY}/S_{XX}$
+  - $\hat\beta_1^2 S_{XX} = \sum(\hat y - \bar y)^2 = SSR$
+  - $S_{YY} = SST$
+
+$$\rho^2 = \frac{SSR}{SST} = R^2$$
+
+::: {.callout-tip}
+- **단순선형회귀에서 결정계수 = 상관계수의 제곱**
+- $R^2$는 $y$와 $\hat y$의 상관계수 제곱과도 동일
+:::
+
+#### 변동계수 (CV, coefficient of variation)
+
+$$CV = \frac{\sigma}{\mu} \times 100(\%)$$
+
+- relative standard deviation(RSD)이라고도 함
+- 용도: 단위가 다른 **여러 데이터셋을 한 번에 비교**할 때 표준화
+
+## 5. Data Example II — Diagnostics and Model Evaluation
+
+### 5.1 잔차 분석
+
+```{r}
+#| label: resid-plots
+#| fig-cap: "산점도 / 적합값 대 잔차 / 잔차의 QQ-plot"
+#| fig-width: 9
+#| fig-height: 3.5
+op <- par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+set.seed(1)
+plot(jitter(gw$snp_LDLR, 0.6), gw$ldl, pch = 20, cex = 0.5,
+     xlab = "snp_LDLR", ylab = "ldl", main = "Scatter")
+plot(jitter(fitted(model), 0.4), residuals(model), pch = 20, cex = 0.5,
+     xlab = "Fitted", ylab = "Residuals", main = "Fitted vs Residuals")
+abline(h = 0, lty = 2)
+qqnorm(residuals(model), pch = 20, cex = 0.5, main = "QQ-plot")
+qqline(residuals(model))
+par(op)
+```
+
+- 점검 대상: Linearity, Constant Variance, Independence, Normality
+- 결과
+  - 적합값 대 잔차: 세 유전형의 산포가 대체로 비슷 → 등분산 대체로 성립
+  - QQ-plot: 대부분 직선 위, 그러나 **오른쪽 끝의 몇 점이 크게 벗어남** → 정규성은 소수 관측치 때문에 깨짐
+
+### 5.2 이상치
+
+```{r}
+#| label: outliers
+sr <- rstandard(model)
+sum(abs(sr) > 2)                       # 기준 |r| > 2
+round(2 * pnorm(-2) * nrow(gw), 1)     # 정규분포라면 기대되는 개수
+```
+
+::: {.callout-warning}
+## 표본이 크면 절댓값 2 기준을 그대로 쓰면 안 됨
+- 정규분포에서도 $|r| > 2$는 4.6% → 1500명이면 **68명쯤은 당연히** 넘음
+- 실제로는 48명 — 오히려 적음
+  - 극단값 몇 개가 $\hat\sigma$를 부풀려 나머지의 표준화잔차가 작아졌기 때문
+- 기준을 $n$에 맞춤: 1500명 중 우연히 넘을 확률이 5%가 되는 값 $\approx 4.15$ (Bonferroni)
+:::
+
+```{r}
+#| label: outliers-extreme
+round(qnorm(1 - 0.025 / nrow(gw)), 2)  # n에 맞춘 기준
+big <- order(abs(sr), decreasing = TRUE)[1:8]
+data.frame(iid = gw$iid[big], geno = gw$snp_LDLR[big],
+           ldl = gw$ldl[big], rstd = round(sr[big], 2), row.names = NULL)
+```
+
+- 표준화잔차 **4.6~7.9인 6명**이 뚜렷이 떨어져 있음 (7번째는 3.2)
+  - 정규분포라면 1500명 중 $|r| > 4.6$이 나올 기대 개수는 0.006명 → 우연이 아님
+  - 6명 모두 유전형 **BB**, LDL 7~9.5 mmol/L
+- 이들이 회귀선을 얼마나 끌고 가는지(영향점인지), 왜 이런 값인지는 **3-III**에서 확인
+  - 1-I에서 $\hat\beta_1$(0.336)이 참값(0.28)보다 컸던 것과 관련
+
+### 5.3 설명된 변동
+
+```{r}
+#| label: r2
+summary(model)$r.squared
+cor(gw$snp_LDLR, gw$ldl)^2   # rho^2 = R^2 확인
+```
+
+- LDL 변동의 약 **7%** 가 이 SNP로 설명됨
+- 1-I의 p-value는 $3.6\times10^{-26}$ — **유의성과 설명력은 다른 이야기**
+  - $n$이 크면 작은 효과도 매우 유의해짐
+  - 실제 GWAS의 SNP 하나는 형질 변동의 1%도 설명하지 못하는 경우가 대부분 → 다유전자 점수(PRS, 3-IV/V·5-III)
+
+::: {.callout-tip collapse="true"}
+## 참고 — `abline()`에 모형 객체를 그대로 넣기
+```r
+fit <- lm(ldl ~ snp_LDLR, data = gw)
+plot(ldl ~ snp_LDLR, data = gw)
+abline(fit, col = "red")
+title(expression(italic(ldl == 2.91 + 0.336 %*% snp)))
+```
+- `abline()`에 `lm` 객체를 넣으면 계수를 꺼내지 않아도 선이 그려짐
+:::

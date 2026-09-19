@@ -1,0 +1,476 @@
+---
+title: "4-V. Poisson Regression: Inference and Model Assessment"
+description: "Wald와 이탈도 검정, 잔차와 적합도, 과산포와 음이항 회귀 — RNA-seq 차등발현"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="4-V. 포아송 회귀: 추론과 모형 평가">
+        <meta name="ai-context" content="
+        이 챕터는 포아송 회귀의 추론과 모형 평가, 특히 과산포를 다룹니다. 자료는 가상 RNA-seq 카운트입니다.
+        추론은 로지스틱과 같은 구조입니다. 개별 계수는 Wald z 검정, 부분집합과 전체 회귀는 이탈도 차이로 봅니다.
+        적합도는 이탈도와 Pearson 통계량을 자유도 n-p-1의 카이제곱과 비교합니다.
+        과산포 모수는 phi = X2/(n-p-1)로 추정하며 1보다 훨씬 크면 과산포입니다.
+        핵심 대조는 두 유전자입니다. G0001은 참 log2FC 1.2이고 포아송이 맞는 유전자로
+        이탈도 19.48 (df 22, p = 0.62), phi = 0.88입니다.
+        G0021은 참 log2FC가 똑같이 1.2이지만 과산포가 있어 이탈도가 14271, phi가 680입니다.
+        포아송 모형은 이 유전자에 대해 표준오차를 0.0083으로 계산하지만 이것은 완전히 잘못된 값입니다.
+        quasi-Poisson은 표준오차를 sqrt(phi)배로 부풀려 0.216으로 바로잡고,
+        음이항 회귀는 dispersion 0.253을 추정해(참값 0.20) 계수 0.878, 표준오차 0.206을 줍니다.
+        유전자 500개 전체를 스캔하면 Bonferroni 기준으로 포아송은 귀무 유전자 441개 중 315개를 위양성으로 냅니다.
+        quasi-Poisson은 0개, 음이항은 3개입니다. 이것이 edgeR과 DESeq2가 음이항을 쓰는 이유입니다.
+        비선형 관계는 다항식이나 mgcv의 평활항으로 모형화합니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `4-V. (Poisson) Statistical Inference, Model Assessment and Classification.docx`
+- 데이터: `data/rnaseq_counts.csv`, `data/rnaseq_samples.csv`, `data/rnaseq_truth.csv`
+:::
+
+```{r}
+#| label: setup
+#| include: false
+cnt <- read.csv("data/rnaseq_counts.csv", row.names = 1)
+smp <- read.csv("data/rnaseq_samples.csv")
+tru <- read.csv("data/rnaseq_truth.csv", row.names = 1)
+smp$group <- factor(smp$group, levels = c("Control", "Treated"))
+smp$batch <- factor(smp$batch)
+off <- log(smp$lib_size)
+gene <- function(g) {
+  d <- data.frame(count = as.numeric(cnt[g, ]), smp)
+  d$off <- log(d$lib_size)
+  d
+}
+```
+
+## 1. Statistical Inference
+
+### 1.1 개별 계수 — Wald 검정
+
+$$\hat\beta_j \ \dot\sim\ N\bigl(\beta_j,\ V(\hat\beta_j)\bigr),
+\qquad z = \frac{\hat\beta_j}{se(\hat\beta_j)}$$
+
+- 로지스틱과 완전히 같은 구조 — MLE의 대표본 정규근사
+- 표본이 작거나 카운트가 작으면 근사가 나빠짐 → 1종 오류 증가
+
+$$\text{RR의 신뢰구간} = \exp\bigl\{\hat\beta_j \pm z_{\alpha/2}\,se(\hat\beta_j)\bigr\}$$
+
+### 1.2 계수의 부분집합 — 이탈도 검정
+
+$$D = \text{Deviance}_{\text{reduced}} - \text{Deviance}_{\text{full}}
+\ \dot\sim\ \chi^2_q$$
+
+- 완전모형과 축소모형의 이탈도 차이
+- 선형회귀의 부분 F-검정, 로지스틱의 부분 LRT와 같은 자리
+
+### 1.3 전체 회귀
+
+$$H_0: \beta_1 = \cdots = \beta_p = 0,
+\qquad D = \text{Null deviance} - \text{Residual deviance}
+\ \dot\sim\ \chi^2_p$$
+
+## 2. Data Example I — Statistical Inference
+
+```{r}
+#| label: load
+cnt <- read.csv("data/rnaseq_counts.csv", row.names = 1)
+smp <- read.csv("data/rnaseq_samples.csv")
+tru <- read.csv("data/rnaseq_truth.csv", row.names = 1)
+smp$group <- factor(smp$group, levels = c("Control", "Treated"))
+smp$batch <- factor(smp$batch)
+
+## 유전자 하나를 분석용 데이터프레임으로 꺼내는 도우미
+gene <- function(g) {
+  d <- data.frame(count = as.numeric(cnt[g, ]), smp)
+  d$off <- log(d$lib_size)
+  d
+}
+d1 <- gene("G0001")
+m1 <- glm(count ~ group + batch, family = poisson, data = d1,
+          offset = off)
+round(summary(m1)$coef, 4)
+```
+
+```{r}
+#| label: rr-ci
+round(exp(cbind(RR = coef(m1), confint.default(m1)))[-1, ], 4)
+c(log2FC = coef(m1)[2] / log(2), true = tru["G0001", "true_lfc"])
+```
+
+```{r}
+#| label: deviance-tests
+## 전체 회귀
+c(D = m1$null.deviance - m1$deviance,
+  df = m1$df.null - m1$df.residual,
+  p = pchisq(m1$null.deviance - m1$deviance,
+             m1$df.null - m1$df.residual, lower.tail = FALSE))
+
+## 배치 항만 빼 본 부분 검정
+anova(glm(count ~ group, family = poisson, data = d1, offset = off),
+      m1, test = "LRT")
+```
+
+- 처리 효과는 압도적으로 유의, 배치 효과는 없음 (참값과 일치)
+
+## 3. Model Fit Assessment
+
+### 3.1 가정
+
+| 가정 | 내용 | 점검 방법 |
+|---|---|---|
+| 로그선형성 | $\log E(Y)$가 $X$의 선형결합 | $X$ vs 잔차 |
+| 독립성 | 관측치가 서로 독립 | 설계·잔차 패턴 |
+| 평균 = 분산 | 포아송분포 | **이탈도·Pearson GOF, $\hat\phi$** |
+
+- 오차항이 없으므로 "잔차의 정규성" 같은 가정은 없음
+- 실무에서 가장 자주 깨지는 것이 **세 번째**
+
+### 3.2 잔차
+
+$$r_{P,i} = \frac{y_i - \hat\mu_i}{\sqrt{\hat\mu_i}},
+\qquad
+d_i = \mathrm{sign}(y_i - \hat\mu_i)
+\sqrt{2\Bigl\{y_i\log\frac{y_i}{\hat\mu_i} - (y_i - \hat\mu_i)\Bigr\}}$$
+
+$$\sum_i r_{P,i}^2 = X^2, \qquad \sum_i d_i^2 = \text{Deviance}$$
+
+### 3.3 적합도 검정
+
+$$D \ \dot\sim\ \chi^2_{\,n-p-1},
+\qquad X^2 \ \dot\sim\ \chi^2_{\,n-p-1}$$
+
+::: {.callout-important}
+- 로지스틱과 달리 **개별 관측치 단위로 검정이 가능함**
+  - 포아송은 관측치 하나가 이미 "여러 사건의 합"이라 정보량이 있음
+  - 단, $\hat\mu_i$가 충분히 커야 함 (대략 $\ge 5$)
+- 카운트가 아주 작은 유전자에서는 이 검정도 믿기 어려움
+:::
+
+### 3.4 과산포
+
+$$\hat\phi = \frac{X^2}{n - p - 1} \quad\text{또는}\quad \frac{D}{n-p-1}$$
+
+| $\hat\phi$ | 해석 |
+|---|---|
+| $\approx 1$ | 포아송이 맞음 |
+| $> 1$ | **과산포** — 관측 변동이 포아송이 허용하는 것보다 큼 |
+| $< 1$ | 과소산포 (드묾) |
+
+- 과산포의 원인
+  - 개체 간 생물학적 이질성 (RNA-seq에서는 이것이 지배적)
+  - 누락된 설명변수
+  - 군집·반복측정 구조
+- **과산포를 무시하면 표준오차가 과소평가되어 위양성이 폭증함**
+
+### 3.5 두 가지 대응
+
+| 방법 | 분산 가정 | R |
+|---|---|---|
+| quasi-Poisson | $V(Y) = \phi\mu$ | `family = quasipoisson` |
+| 음이항 (NB) | $V(Y) = \mu + \alpha\mu^2$ | `MASS::glm.nb` |
+
+- quasi-Poisson — 계수는 그대로, 표준오차만 $\sqrt{\hat\phi}$배
+  - 완전한 가능도가 아니므로 AIC를 쓸 수 없음
+- 음이항 — 분산함수 자체를 바꿈. $\alpha$(dispersion)를 함께 추정
+  - 카운트가 클수록 분산이 **제곱으로** 커지는 형태 → RNA-seq에 잘 맞음
+  - **edgeR, DESeq2가 쓰는 모형**
+
+$$V(Y) = \mu + \alpha\mu^2, \qquad \text{BCV} = \sqrt{\alpha}$$
+
+## 4. Data Example II — Model Fit Assessment
+
+### 4.1 같은 효과크기, 다른 산포
+
+```{r}
+#| label: two-genes
+tru[c("G0001", "G0021"), c("true_lfc", "dispersion", "is_de")]
+```
+
+- 두 유전자의 **참 log2 fold change는 1.2로 동일**
+- 다른 것은 과산포뿐 (`G0001`은 0, `G0021`은 0.20)
+
+```{r}
+#| label: two-genes-plot
+#| fig-cap: "CPM으로 본 두 유전자 — 군내 산포가 확연히 다름"
+#| fig-width: 8
+#| fig-height: 4
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+for (g in c("G0001", "G0021")) {
+  d <- gene(g)
+  cpm <- d$count / d$lib_size * 1e6
+  stripchart(cpm ~ d$group, vertical = TRUE, pch = 19,
+             col = c("#4c72b0", "#dd8452"), method = "jitter",
+             ylab = "CPM", main = g)
+}
+par(op)
+```
+
+```{r}
+#| label: fit-both
+d1 <- gene("G0001"); d21 <- gene("G0021")
+p1  <- glm(count ~ group, family = poisson, data = d1,  offset = off)
+p21 <- glm(count ~ group, family = poisson, data = d21, offset = off)
+summ <- function(m) {
+  X2 <- sum(residuals(m, type = "pearson")^2)
+  c(beta = coef(m)[2], se = summary(m)$coef[2, 2],
+    p = summary(m)$coef[2, 4], deviance = m$deviance,
+    df = m$df.residual, phi = X2 / m$df.residual)
+}
+round(rbind(G0001 = summ(p1), G0021 = summ(p21)), 4)
+```
+
+::: {.callout-important}
+## 포아송 모형이 무너지는 방식
+
+| | `G0001` | `G0021` |
+|---|---|---|
+| 참 log2FC | 1.2 | 1.2 |
+| 이탈도 / df | 19.5 / 22 | **14271 / 22** |
+| GOF p-value | 0.62 | $< 10^{-300}$ |
+| $\hat\phi$ | 0.88 | **680** |
+| 포아송 표준오차 | 0.0082 | 0.0083 |
+
+- `G0021`의 표준오차가 `G0001`과 거의 같게 나옴 — **말이 안 됨**
+- 포아송 모형은 "분산 = 평균"을 **가정**하므로, 자료가 아무리 흩어져 있어도
+  표준오차를 평균만 보고 계산해 버림
+- 이탈도 GOF가 이 사실을 정확히 잡아냄
+:::
+
+### 4.2 잔차 분석
+
+```{r}
+#| label: resid-plot
+#| fig-cap: "Pearson 잔차 — 오른쪽은 척도가 100배 다름"
+#| fig-width: 8
+#| fig-height: 4
+fits <- list(G0001 = p1, G0021 = p21)
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+for (nm in names(fits)) {
+  m <- fits[[nm]]
+  plot(fitted(m), residuals(m, type = "pearson"), pch = 19,
+       col = "#4c72b0", xlab = "Fitted", ylab = "Pearson residual",
+       main = nm)
+  abline(h = c(-2, 0, 2), lty = c(3, 1, 3), col = c(1, "red", 1))
+}
+par(op)
+```
+
+```{r}
+#| label: resid-range
+round(rbind(G0001 = range(residuals(p1,  type = "pearson")),
+            G0021 = range(residuals(p21, type = "pearson"))), 2)
+```
+
+- `G0001`의 잔차는 $(-2.20,\ 1.65)$ — $\pm 2$ 부근에 머무름
+- `G0021`의 잔차는 $(-39.4,\ 73.9)$ — 수십 배로 벗어남 → 모형이 자료를 설명하지 못함
+
+### 4.3 quasi-Poisson과 음이항
+
+```{r}
+#| label: quasi-nb
+library(MASS)
+q21 <- glm(count ~ group, family = quasipoisson, data = d21,
+           offset = off)
+n21 <- glm.nb(count ~ group + offset(off), data = d21)
+
+round(rbind(
+  Poisson       = summary(p21)$coef[2, ],
+  quasiPoisson  = summary(q21)$coef[2, ],
+  NegBinomial   = summary(n21)$coef[2, ]), 4)
+c(true_beta = tru["G0021", "true_lfc"] * log(2))
+```
+
+```{r}
+#| label: nb-theta
+c(theta = n21$theta, dispersion_hat = 1 / n21$theta,
+  dispersion_true = tru["G0021", "dispersion"])
+```
+
+::: {.callout-important}
+- quasi-Poisson — 계수는 포아송과 **똑같고** 표준오차만 $\sqrt{680} = 26$배로 커짐
+- 음이항 — 계수까지 다시 추정 (0.982 → 0.878, 참값 0.832에 더 가까움)
+  - 분산이 큰 관측치의 가중치를 낮추기 때문
+- 추정된 dispersion 0.253 vs 참값 0.20 — 시료 24개치고 잘 맞힘
+:::
+
+```{r}
+#| label: nb-on-poisson-gene
+## 포아송이 맞는 유전자에 음이항을 쓰면?
+n1 <- glm.nb(count ~ group + offset(off), data = d1)
+round(rbind(Poisson = summary(p1)$coef[2, ],
+            NegBinomial = summary(n1)$coef[2, ]), 4)
+c(theta = n1$theta)
+```
+
+- $\theta$가 매우 커짐 → $\alpha = 1/\theta \to 0$ → **음이항이 포아송으로 수렴**
+- 즉 음이항은 포아송을 **특수한 경우로 포함**함 → 기본값으로 써도 손해가 없음
+
+### 4.4 유전자 500개 전체 스캔
+
+```{r}
+#| label: full-scan
+off <- log(smp$lib_size)
+grp <- smp$group
+G   <- nrow(cnt)
+pv  <- matrix(NA_real_, nrow = G, ncol = 3,
+              dimnames = list(rownames(cnt),
+                              c("poisson", "quasi", "negbin")))
+lfc <- numeric(G)
+for (i in 1:G) {
+  y <- as.numeric(cnt[i, ])
+  pv[i, 1] <- summary(glm(y ~ grp, family = poisson,
+                          offset = off))$coef[2, 4]
+  pv[i, 2] <- summary(glm(y ~ grp, family = quasipoisson,
+                          offset = off))$coef[2, 4]
+  nb <- tryCatch(suppressWarnings(glm.nb(y ~ grp + offset(off))),
+                 error = function(e) NULL)
+  if (!is.null(nb)) {
+    pv[i, 3] <- summary(nb)$coef[2, 4]
+    lfc[i]   <- coef(nb)[2] / log(2)
+  }
+}
+de <- tru$is_de == 1
+report <- function(p, thr) {
+  s <- !is.na(p) & p < thr
+  c(significant = sum(s), true_positive = sum(s & de),
+    false_positive = sum(s & !de))
+}
+thr <- 0.05 / G
+rbind(Poisson = report(pv[, 1], thr),
+      quasiPoisson = report(pv[, 2], thr),
+      NegBinomial  = report(pv[, 3], thr))
+c(true_DE_genes = sum(de), null_genes = sum(!de), bonferroni = thr)
+```
+
+::: {.callout-important}
+## 왜 edgeR과 DESeq2는 음이항을 쓰는가
+
+Bonferroni 기준 ($p < 10^{-4}$)
+
+| 방법 | 유의 | 참 DE 검출 | **위양성** |
+|---|---|---|---|
+| Poisson | 373 | 58 / 59 | **315 / 441** |
+| quasi-Poisson | 31 | 31 / 59 | 0 / 441 |
+| 음이항 | 41 | 38 / 59 | 3 / 441 |
+
+- 포아송은 귀무 유전자의 **71%를 차등발현이라고 선언**함
+- quasi-Poisson은 보수적 — 위양성 0이지만 참 DE도 절반만 검출
+- 음이항이 균형이 가장 좋음
+:::
+
+```{r}
+#| label: fdr
+fdr <- function(p) {
+  a <- p.adjust(p, "BH")
+  s <- !is.na(a) & a < 0.05
+  c(significant = sum(s), true_positive = sum(s & de),
+    false_positive = sum(s & !de))
+}
+rbind(Poisson = fdr(pv[, 1]), quasiPoisson = fdr(pv[, 2]),
+      NegBinomial = fdr(pv[, 3]))
+```
+
+```{r}
+#| label: volcano
+#| fig-cap: "Volcano plot — 음이항 기준"
+col <- ifelse(de, "#c44e52", "#999999")
+plot(lfc, -log10(pv[, 3]), pch = 20, col = col, cex = 0.7,
+     xlab = "estimated log2 fold change", ylab = "-log10(p)")
+abline(h = -log10(thr), lty = 2)
+abline(v = 0, lty = 3)
+legend("topleft", bty = "n", pch = 20, col = c("#c44e52", "#999999"),
+       legend = c("참 DE 유전자", "귀무 유전자"))
+```
+
+```{r}
+#| label: lfc-accuracy
+ok <- !is.na(lfc)
+c(correlation = cor(lfc[ok], tru$true_lfc[ok]),
+  RMSE = sqrt(mean((lfc[ok] - tru$true_lfc[ok])^2)))
+```
+
+```{r}
+#| label: pvalue-hist
+#| fig-cap: "귀무 유전자의 p-value 분포 — 균등분포여야 정상"
+#| fig-width: 9
+#| fig-height: 3.5
+op <- par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+for (j in 1:3) {
+  hist(pv[!de, j], breaks = seq(0, 1, 0.05), col = "#4c72b0",
+       border = "white", xlab = "p-value", main = colnames(pv)[j])
+  abline(h = sum(!de) / 20, col = "red", lwd = 2)
+}
+par(op)
+```
+
+- 포아송의 p-value는 **0 근처에 몰려 있음** → 검정이 완전히 망가짐
+- quasi-Poisson과 음이항은 대체로 균등분포 → 1종 오류가 통제됨
+
+### 4.5 비선형 관계 모델링
+
+- `G0061`은 나이에 대해 **비선형**으로 반응하도록 만든 유전자
+
+```{r}
+#| label: nonlinear-eda
+#| fig-cap: "나이와 발현량 — 직선으로는 안 맞음"
+d61 <- gene("G0061")
+d61$agz <- (d61$age - 45) / 10
+d61$cpm <- d61$count / d61$lib_size * 1e6
+plot(d61$age, d61$cpm, pch = 19, col = "#4c72b0",
+     xlab = "Age", ylab = "G0061 CPM")
+```
+
+```{r}
+#| label: nonlinear-fit
+lin  <- glm(count ~ agz, family = quasipoisson, data = d61,
+            offset = off)
+quad <- glm(count ~ agz + I(agz^2), family = quasipoisson,
+            data = d61, offset = off)
+round(summary(quad)$coef, 4)
+anova(lin, quad, test = "F")
+```
+
+- 이차항 계수 0.305 (참값 $0.45 \times \log 2 = 0.312$)
+- 부분 F-검정 $F = 71.3$, p-value $= 3.4\times10^{-8}$ → 이차항이 필요함
+
+::: {.callout-tip}
+- quasi-Poisson에서는 이탈도 차이 검정 대신 **F-검정**을 씀 (`test = "F"`)
+- 산포모수 $\phi$를 추정했으므로 선형회귀와 같은 이유로 F가 적절함
+:::
+
+```{r}
+#| label: gam
+#| fig-cap: "GAM 평활항 — 변환 형태를 지정하지 않고 자료가 정하게 함"
+library(mgcv)
+g61 <- gam(count ~ s(agz, k = 6) + offset(off),
+           family = quasipoisson, data = d61)
+summary(g61)$s.table
+plot(g61, shade = TRUE, xlab = "(age - 45) / 10",
+     ylab = "s(age)")
+```
+
+- `mgcv::s()` — 어떤 변환이 좋은지 **미리 정하지 않고** 평활도를 자료에서 추정
+- 유효자유도(edf) 2.90 → 이차식(edf 2)보다 조금 더 유연한 곡선을 골랐음
+- Part 6-I에서 GAM을 본격적으로 다룸
+
+::: {.callout-note}
+## Part 4 정리
+
+| | 로지스틱 (4-I~III) | 포아송 (4-IV~V) |
+|---|---|---|
+| 반응변수 | 0/1 | 0, 1, 2, … |
+| 연결함수 | logit | log |
+| 계수의 지수 | odds ratio | rate ratio (fold change) |
+| 노출량 | — | **offset** |
+| 분산 | $p(1-p)$ | $\mu$ |
+| 과산포 대응 | quasibinomial | quasipoisson, **음이항** |
+| 적합도 검정 | 집계 후 이탈도 | 이탈도·Pearson (개별 가능) |
+
+- 공통 구조: MLE, Wald z, 이탈도 차이 검정, 이탈도 잔차
+- **분포와 연결함수만 갈아 끼우면 된다**는 것이 GLM의 요점
+- 다음 Part 5는 설명변수가 매우 많을 때의 **변수선택**
+:::

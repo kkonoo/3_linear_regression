@@ -1,0 +1,107 @@
+project:
+  type: website
+  execute-dir: project
+  render:
+    - index.qmd
+    - chapters/*.qmd
+
+website:
+  title: "3. Linear Regression"
+  description: "회귀분석: 단순선형회귀부터 일반화선형모형·변수선택까지"
+  favicon: images/logo.ico
+  navbar:
+    left:
+      - href: index.qmd
+        text: Home
+    right:
+      - icon: github
+        href: https://github.com/kkonoo/3_linear_regression
+
+  sidebar:
+    style: "floating"
+    search: true
+    contents:
+      - text: "Home"
+        href: index.qmd
+      - chapters/00_setup.qmd
+      - section: "Part 1. Simple Linear Regression"
+        contents:
+          - chapters/01_slr_estimation.qmd
+          - chapters/02_slr_prediction.qmd
+          - chapters/03_slr_examples.qmd
+      - section: "Part 2. ANOVA"
+        contents:
+          - chapters/04_anova_basics.qmd
+          - chapters/05_anova_comparison.qmd
+      - section: "Part 3. Multiple Linear Regression"
+        contents:
+          - chapters/06_mlr_estimation.qmd
+          - chapters/07_mlr_inference.qmd
+          - chapters/08_mlr_diagnostics.qmd
+          - chapters/09_mlr_casestudy.qmd
+      - section: "Part 4. Generalized Linear Models"
+        contents:
+          - chapters/10_logistic_basics.qmd
+          - chapters/11_logistic_inference.qmd
+          - chapters/12_logistic_casestudy.qmd
+          - chapters/13_poisson_basics.qmd
+          - chapters/14_poisson_inference.qmd
+      - section: "Part 5. Variable Selection"
+        contents:
+          - chapters/15_varsel_basics.qmd
+          - chapters/16_regularized.qmd
+          - chapters/17_varsel_casestudy.qmd
+      - section: "Part 6. Other Regression Models"
+        contents:
+          - chapters/18_other_models_1.qmd
+          - chapters/19_other_models_2.qmd
+      - section: "부록"
+        contents:
+          - chapters/A1_cheatsheet.qmd
+          - chapters/A2_r_reference.qmd
+
+  page-footer:
+    left: "Copyright 2026, Eunji"
+
+
+format:
+  html:
+    theme:
+      light: cosmo
+    css: assets/html.css
+    toc: true
+    toc-depth: 4
+    toc-title: "Contents"
+    toc-float: true
+    page-layout: full
+
+    code-fold: false
+    code-copy: true
+    highlight-style: github
+
+    number-sections: false
+    smooth-scroll: true
+
+    # 그림은 SVG 벡터로 출력
+    fig-format: svg
+    fig-width: 7
+    fig-height: 4.5
+    fig-dpi: 300
+
+    # 수식은 LaTeX + MathJax
+    html-math-method: mathjax
+
+    # AI 채팅 위젯 전역 설정
+    include-after-body: assets/ai-chat-init.html
+
+  revealjs:
+    css: assets/revealjs.css
+    fig-format: svg
+
+
+execute:
+  freeze: auto          # 코드 실행 결과 캐시 (빠른 빌드)
+  echo: true
+  eval: true            # R 코드를 실제로 실행해 플롯 생성
+  warning: false
+  message: false

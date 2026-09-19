@@ -1,0 +1,338 @@
+---
+title: "부록 B. R 함수 레퍼런스"
+description: "R 기초와 강의에서 쓴 R 함수·패키지를 용도별로 정리 — 표와 짧은 실행 예제"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="부록 B. R 함수 레퍼런스">
+        <meta name="ai-context" content="
+        이 부록은 강의에서 사용하는 R 함수와 패키지를 용도별로 정리하고 각 함수가 쓰인 장을 연결합니다.
+        R 기초: 할당(<-), 벡터와 인덱싱, 데이터프레임, factor, table, tapply, aggregate, merge, sapply, 도움말(?).
+        공식 문법: y ~ x, +, :, *, -1, I(), poly(), factor(), offset().
+        적합: lm, aov, glm(binomial, poisson, quasipoisson), MASS::glm.nb, nls, mgcv::gam, MASS::rlm, quantreg::rq,
+        nlme::gls, nlme::lme, glmnet::glmnet, MASS::lm.ridge.
+        추론과 비교: summary, coef, confint, confint.default, vcov, anova(순차 및 모형 비교, test = LRT), AIC, BIC, logLik, TukeyHSD, p.adjust.
+        예측: predict(interval = confidence 또는 prediction), GLM은 type = link 또는 response.
+        진단: plot(model), rstandard, hatvalues, cooks.distance, qqnorm, shapiro.test, VIF는 정의대로 1/(1-R^2)로 계산.
+        선택과 교차검증: step, leaps::regsubsets, glmnet::cv.glmnet, boot::cv.glm.
+        행렬 계산: model.matrix, solve, crossprod, qr, chol, optim, optimize.
+        시각화는 base R 그래픽(plot, pairs, boxplot, hist, mosaicplot)만 씁니다.
+        패키지는 MASS, boot, glmnet, leaps, mgcv, nlme, quantreg 일곱 개입니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `resource_R_reference_card.pdf` (R Reference Card), `resource_R_intro.pdf` (Introduction to R)
+- 원자료의 R 기초를 짧게 요약하고, **이 강의에서 실제로 쓴 함수**를 용도별로 정리
+- 실행 예제 데이터: `data/gwas_cohort.csv` (KNU-Lipid, [1-I](01_slr_estimation.qmd) 참고)
+:::
+
+## 1. R 기초
+
+### 1.1 값과 벡터
+
+| 할 일 | 코드 | 비고 |
+|---|---|---|
+| 할당 | `x <- 5` | `=`도 되지만 `<-`가 관례 |
+| 벡터 만들기 | `c(1, 3, 5)`, `1:10`, `seq(0, 1, by = 0.1)`, `rep(0, 5)` | |
+| 원소 꺼내기 | `x[2]`, `x[-1]`, `x[x > 3]` | 1부터 셈, 음수 = 제외 |
+| 요약 | `length`, `sum`, `mean`, `var`, `sd`, `median`, `quantile` | |
+| 결측 | `NA`, `is.na(x)`, `mean(x, na.rm = TRUE)` | |
+| 벡터 연산 | `x + 1`, `x * y`, `log(x)` | 원소별로 계산 |
+
+```{r}
+#| label: vector-basics
+x <- c(2.1, 3.4, 2.9, 5.2, 3.8)
+c(n = length(x), mean = mean(x), sd = sd(x))
+x[x > 3]                       # 조건으로 고르기
+round(log(x), 2)               # 원소별 계산
+```
+
+### 1.2 데이터프레임
+
+| 할 일 | 코드 | 쓰인 곳 |
+|---|---|---|
+| 구조 보기 | `str(d)`, `head(d)`, `dim(d)`, `summary(d)` | 매 장 |
+| 열 꺼내기 | `d$ldl`, `d[, "ldl"]` | 매 장 |
+| 행 고르기 | `subset(d, fh_carrier == 0)`, `d[d$age > 60, ]` | [3-III](08_mlr_diagnostics.qmd) |
+| 범주형 만들기 | `factor(x, levels = , labels = )` | [2-I](04_anova_basics.qmd) |
+| 빈도표 | `table(x)`, `table(x, y)` | [3-IV/V](09_mlr_casestudy.qmd) |
+| 집단별 요약 | `tapply(y, g, mean)`, `aggregate(y ~ g, d, mean)` | [2-I](04_anova_basics.qmd), [3-I](06_mlr_estimation.qmd) |
+| 두 표 합치기 | `merge(a, b, by = "iid")` | [1-III](03_slr_examples.qmd) |
+
+```{r}
+#| label: df-basics
+gw <- read.csv("data/gwas_cohort.csv")
+gw$pop <- factor(gw$pop)
+gwc <- subset(gw, fh_carrier == 0)          # FH 보인자 제외
+dim(gwc)
+table(gwc$pop, gwc$snp_LDLR)
+round(tapply(gwc$ldl, gwc$snp_LDLR, mean), 3)
+aggregate(cbind(bmi, ldl) ~ pop, data = gwc, FUN = mean)
+```
+
+### 1.3 반복과 함수
+
+| 할 일 | 코드 | 쓰인 곳 |
+|---|---|---|
+| 함수 만들기 | `f <- function(a, b = 1) { a + b }` | 매 장 (도우미 함수) |
+| 벡터·리스트에 적용 | `sapply(x, f)`, `lapply(x, f)` | [4-V](14_poisson_inference.qmd) 유전자 스캔 |
+| 행·열에 적용 | `apply(M, 2, f)` | [5-III](17_varsel_casestudy.qmd), [6-II](19_other_models_2.qmd) |
+| 반복 시뮬레이션 | `replicate(1000, { ... })` | [6-I](18_other_models_1.qmd) |
+| 난수 고정 | `set.seed(1)` | 모든 시뮬레이션 |
+
+```{r}
+#| label: apply-basics
+## SNP 10개 각각의 단순회귀 p-value — 작은 GWAS
+snps <- grep("^snp_", names(gwc), value = TRUE)
+p <- sapply(snps, function(s) {
+  summary(lm(gwc$ldl ~ gwc[[s]]))$coef[2, 4]
+})
+signif(sort(p), 3)
+```
+
+- LD 블록 셋(`snp_LDLR`, `snp_LD1`, `snp_LD2`)과 함께 `snp_AIM`도 매우 유의 — 가짜 연관인 이유는 [3-IV/V](09_mlr_casestudy.qmd)
+
+### 1.4 도움말
+
+| 코드 | 하는 일 |
+|---|---|
+| `?lm`, `help(lm)` | 함수 도움말 |
+| `??regression` | 키워드로 도움말 검색 |
+| `example(lm)` | 도움말의 예제 실행 |
+| `args(glm)` | 인자 목록 |
+| `methods(class = "lm")` | `lm` 객체에 쓸 수 있는 함수들 |
+
+## 2. 모형 적합
+
+### 2.1 공식(formula) 문법
+
+| 공식 | 뜻 | 예 |
+|---|---|---|
+| `y ~ x` | $y = \beta_0 + \beta_1 x$ | [1-I](01_slr_estimation.qmd) |
+| `y ~ x1 + x2` | 주효과 | [3-I](06_mlr_estimation.qmd) |
+| `y ~ x1:x2` | 교호작용 항만 | |
+| `y ~ x1 * x2` | `x1 + x2 + x1:x2` | [3-I](06_mlr_estimation.qmd) (나이 × 유전형) |
+| `y ~ x - 1` | 절편 없음 | [2-II](05_anova_comparison.qmd) |
+| `y ~ .` | 나머지 열 전부 | |
+| `y ~ I(x^2)` | 산술을 그대로 ($x^2$) | |
+| `y ~ poly(x, 2)` | 직교다항식 | [4-V](14_poisson_inference.qmd), [6-I](18_other_models_1.qmd) |
+| `y ~ factor(g)` | 범주형 → 더미 | [2-I](04_anova_basics.qmd) |
+| `y ~ x + offset(log(n))` | 계수 1로 고정된 항 | [4-IV](13_poisson_basics.qmd) |
+| `log(y) ~ x` | 반응변수 변환 | [1-III](03_slr_examples.qmd) |
+
+### 2.2 적합 함수
+
+| 함수 | 모형 | 핵심 인자 | 쓰인 곳 |
+|---|---|---|---|
+| `lm()` | 선형회귀 (OLS) | `weights =` → WLS | Part 1~3, [6-I](18_other_models_1.qmd) |
+| `aov()` | 분산분석 (`lm`과 같은 모형) | | [2-I](04_anova_basics.qmd), [2-II](05_anova_comparison.qmd) |
+| `glm()` | 일반화선형모형 | `family = binomial / poisson / quasipoisson`, `offset =` | [4-I](10_logistic_basics.qmd)~[4-V](14_poisson_inference.qmd) |
+| `MASS::glm.nb()` | 음이항 회귀 | | [4-V](14_poisson_inference.qmd) |
+| `nls()` | 비선형 회귀 | `start =` (시작값 필수) | [6-I](18_other_models_1.qmd) |
+| `mgcv::gam()` | 일반화가법모형 | `s(x)`, `s(x, y)`, `method = "REML"` | [4-V](14_poisson_inference.qmd), [6-I](18_other_models_1.qmd), [6-II](19_other_models_2.qmd) |
+| `MASS::rlm()` | Huber M-추정 | | [6-I](18_other_models_1.qmd) |
+| `quantreg::rq()` | 분위수(중앙값) 회귀 | `tau = 0.5` | [6-I](18_other_models_1.qmd) |
+| `nlme::gls()` | 일반화 최소제곱 | `correlation = corAR1() / corExp()` | [6-II](19_other_models_2.qmd) |
+| `nlme::lme()` | 혼합효과모형 | `random = list(fid = ~ 1)` | [6-II](19_other_models_2.qmd) |
+| `MASS::lm.ridge()` | Ridge | `lambda =` | [5-II](16_regularized.qmd) |
+| `glmnet::glmnet()` | Lasso / Ridge / Elastic Net | `alpha = 1 / 0 / 사이`, 행렬 입력 | [5-II](16_regularized.qmd), [5-III](17_varsel_casestudy.qmd) |
+
+- `lme()`의 임의효과는 [6-II](19_other_models_2.qmd)처럼 `random = ~ 1 | fid`로 써도 같음 (표 안에서는 세로막대를 쓸 수 없어 `list()` 형식으로 적음)
+
+```{r}
+#| label: fit-basics
+fit  <- lm(ldl ~ snp_LDLR + age + sex + bmi + pop, data = gwc)
+fit2 <- glm(disease ~ ldl + age + sex, family = binomial, data = gwc)
+class(fit); class(fit2)
+```
+
+## 3. 결과 꺼내기와 추론
+
+| 함수 | 돌려주는 것 | 쓰인 곳 |
+|---|---|---|
+| `summary(fit)` | 계수표, $\hat\sigma$, $R^2$, 전체 F | 매 장 |
+| `summary(fit)$coef` | 계수표 행렬 (추정치, 표준오차, t/z, p) | 매 장 |
+| `coef()`, `vcov()` | $\hat\beta$, $\widehat V(\hat\beta)$ | [3-II](07_mlr_inference.qmd) |
+| `confint()` | t 기반 (`lm`), 프로파일 가능도 (`glm`) 신뢰구간 | [1-I](01_slr_estimation.qmd), [3-II](07_mlr_inference.qmd) |
+| `confint.default()` | Wald 신뢰구간 | [4-I](10_logistic_basics.qmd)~[4-V](14_poisson_inference.qmd) |
+| `fitted()`, `residuals()` | 적합값, 잔차 (`type =` 으로 종류 선택) | 매 장 |
+| `df.residual()`, `sigma()` | 잔차 자유도, $\hat\sigma$ | [1-I](01_slr_estimation.qmd) |
+| `anova(fit)` | **순차** 제곱합 표 | [3-II](07_mlr_inference.qmd) |
+| `anova(small, big)` | 부분 F / 이탈도 차 | [3-II](07_mlr_inference.qmd), [4-II](11_logistic_inference.qmd) |
+| `anova(..., test = "LRT")` | GLM 우도비 검정 | [4-II](11_logistic_inference.qmd), [4-V](14_poisson_inference.qmd) |
+| `logLik()`, `AIC()`, `BIC()` | 로그가능도, 정보기준 | [4-I](10_logistic_basics.qmd), [5-I](15_varsel_basics.qmd) |
+| `TukeyHSD(aov_fit)` | Tukey 다중비교 | [2-II](05_anova_comparison.qmd) |
+| `model.tables(aov_fit, "means")` | 집단 평균표 | [2-I](04_anova_basics.qmd) |
+| `p.adjust(p, "BH")` | 다중검정 보정 | [4-V](14_poisson_inference.qmd) |
+
+```{r}
+#| label: inference-basics
+round(summary(fit)$coef, 4)
+confint(fit, "snp_LDLR")
+anova(lm(ldl ~ snp_LDLR, data = gwc), fit)     # 공변량 4개의 부분 F
+round(exp(cbind(OR = coef(fit2), confint.default(fit2))), 3)
+```
+
+## 4. 예측
+
+| 함수 | 용도 | 쓰인 곳 |
+|---|---|---|
+| `predict(fit, newdata)` | 점예측 | [1-II](02_slr_prediction.qmd) |
+| `predict(fit, newdata, interval = "confidence")` | 평균 반응의 신뢰구간 | [1-II](02_slr_prediction.qmd), [3-II](07_mlr_inference.qmd) |
+| `predict(fit, newdata, interval = "prediction")` | 새 관측치의 예측구간 | 같음 |
+| `predict(glm_fit, type = "link")` | 선형예측자 $\mathbf x^T\hat\beta$ | [4-I](10_logistic_basics.qmd) |
+| `predict(glm_fit, type = "response")` | 확률 또는 평균 카운트 | [4-II](11_logistic_inference.qmd) |
+
+```{r}
+#| label: predict-basics
+new <- data.frame(snp_LDLR = 2, age = 60, sex = 1, bmi = 27,
+                  pop = factor("Group1", levels = levels(gwc$pop)))
+predict(fit, new, interval = "confidence")
+predict(fit, new, interval = "prediction")
+predict(fit2, data.frame(ldl = 4, age = 60, sex = 1), type = "response")
+```
+
+::: {.callout-warning}
+- `newdata`에는 모형의 모든 변수가 **같은 이름·같은 형식**으로 있어야 함
+- factor는 원래 자료와 **같은 수준(levels)** 을 지정 — 아니면 오류나 엉뚱한 더미
+:::
+
+## 5. 진단
+
+| 함수 | 용도 | 쓰인 곳 |
+|---|---|---|
+| `plot(fit)` | 진단 그림 4종 (잔차, QQ, scale-location, leverage) | [3-III](08_mlr_diagnostics.qmd) |
+| `qqnorm()`, `qqline()` | 정규 QQ plot | [1-II](02_slr_prediction.qmd) |
+| `rstandard()` | 표준화잔차 | [1-II](02_slr_prediction.qmd), [3-III](08_mlr_diagnostics.qmd) |
+| `hatvalues()` | leverage $h_{ii}$ | [3-III](08_mlr_diagnostics.qmd) |
+| `cooks.distance()` | Cook's distance | [1-III](03_slr_examples.qmd), [3-III](08_mlr_diagnostics.qmd) |
+| `shapiro.test()` | 정규성 검정 | [2-II](05_anova_comparison.qmd) |
+| `acf()` | 잔차 자기상관 | [6-II](19_other_models_2.qmd) |
+| VIF | 정의대로 $1/(1 - R_j^2)$ | [3-III](08_mlr_diagnostics.qmd) |
+
+```{r}
+#| label: diag-basics
+#| fig-cap: "plot(fit) — lm 객체의 기본 진단 그림 4종"
+#| fig-width: 8
+#| fig-height: 7
+op <- par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+plot(fit, pch = 20, cex = 0.5)
+par(op)
+```
+
+```{r}
+#| label: vif-basics
+## VIF를 정의대로: 각 설명변수를 나머지로 회귀한 R^2
+X <- model.matrix(fit)[, -1]
+vif <- sapply(colnames(X), function(j) {
+  1 / (1 - summary(lm(X[, j] ~ X[, -which(colnames(X) == j)]))$r.squared)
+})
+round(vif, 3)
+```
+
+- 모두 1 근처 → 공선성 없음 (LD로 묶인 SNP를 넣으면 11.6까지 오름, [3-III](08_mlr_diagnostics.qmd))
+- `car::vif()`도 같은 값 — 이 강의는 패키지 없이 정의대로 계산
+
+## 6. 변수선택·정규화·교차검증
+
+| 함수 | 용도 | 쓰인 곳 |
+|---|---|---|
+| `step(fit, direction = )` | AIC 기준 단계적 선택 | [5-I](15_varsel_basics.qmd) |
+| `leaps::regsubsets()` | 최량 부분집합 (Cp, BIC) | [5-I](15_varsel_basics.qmd) |
+| `glmnet::cv.glmnet()` | $\lambda$ 교차검증 (`lambda.min`, `lambda.1se`) | [5-II](16_regularized.qmd), [5-III](17_varsel_casestudy.qmd) |
+| `boot::cv.glm(d, fit, K = 10)` | GLM의 K-fold 교차검증 | [4-II](11_logistic_inference.qmd) |
+
+```{r}
+#| label: select-basics
+library(leaps); library(glmnet)
+xs <- c("snp_LDLR", "snp_LD1", "snp_LD2", "snp_AIM",
+        paste0("snp_N", 1:6), "age", "sex", "bmi")
+rs <- summary(regsubsets(ldl ~ ., data = gwc[, c("ldl", xs)],
+                         nvmax = length(xs)))
+best <- which.min(rs$bic)
+names(which(rs$which[best, -1]))            # BIC가 고른 변수
+
+set.seed(1)
+cv <- cv.glmnet(as.matrix(gwc[, xs]), gwc$ldl, alpha = 1)
+b  <- coef(cv, s = "lambda.1se")
+rownames(b)[b[, 1] != 0][-1]                # Lasso가 남긴 변수
+```
+
+- 두 방법 모두 LD 블록에서 `snp_LDLR` 하나만, 귀무 SNP는 버림
+- `snp_AIM`은 집단(`pop`)을 넣지 않았기 때문에 선택됨 — 가짜 연관 ([3-IV/V](09_mlr_casestudy.qmd))
+
+## 7. 행렬 계산 — 공식 직접 계산
+
+| 함수 | 용도 | 쓰인 곳 |
+|---|---|---|
+| `model.matrix(fit)` | 설계행렬 $\mathbf X$ (더미 포함) | [3-I](06_mlr_estimation.qmd) |
+| `t()`, `%*%`, `crossprod(X)` | 전치, 곱, $\mathbf X^T\mathbf X$ | [3-I](06_mlr_estimation.qmd) |
+| `solve(A, b)` | 역행렬·연립방정식 | [3-I](06_mlr_estimation.qmd), [6-I](18_other_models_1.qmd) |
+| `qr()`, `chol()`, `eigen()` | 분해 | [5-II](16_regularized.qmd), [6-II](19_other_models_2.qmd) |
+| `optim()`, `optimize()` | 수치 최적화 (가능도 최대화) | [4-I](10_logistic_basics.qmd), [6-II](19_other_models_2.qmd) |
+| `lm.fit()`, `lm.wfit()` | 행렬을 직접 넣는 빠른 적합 | [6-I](18_other_models_1.qmd) |
+
+```{r}
+#| label: matrix-basics
+X <- model.matrix(fit); y <- gwc$ldl
+b <- solve(crossprod(X), crossprod(X, y))     # (X'X)^{-1} X'y
+max(abs(b - coef(fit)))
+
+## 로지스틱 로그가능도를 optim으로 최대화 → glm과 비교
+Z  <- model.matrix(fit2); d <- gwc$disease
+nll <- function(beta) {
+  eta <- Z %*% beta
+  -sum(d * eta - log(1 + exp(eta)))
+}
+grad <- function(beta) -crossprod(Z, d - plogis(Z %*% beta))
+op <- optim(rep(0, ncol(Z)), nll, grad, method = "BFGS",
+            control = list(reltol = 1e-14, maxit = 1000))
+max(abs(op$par - coef(fit2)))
+```
+
+## 8. 시각화 — base R 그래픽
+
+| 함수 | 용도 | 쓰인 곳 |
+|---|---|---|
+| `plot(x, y)`, `abline(fit)` | 산점도 + 적합선 | [1-I](01_slr_estimation.qmd) |
+| `lines()`, `points()`, `legend()` | 선·점·범례 추가 | 매 장 |
+| `pairs(d)` | 산점도 행렬 | [3-III](08_mlr_diagnostics.qmd) |
+| `boxplot(y ~ g)`, `stripchart()` | 집단별 분포 | [2-I](04_anova_basics.qmd), [4-V](14_poisson_inference.qmd) |
+| `hist()` | 히스토그램 | [2-II](05_anova_comparison.qmd) |
+| `mosaicplot(table)` | 분할표 그림 (base R) | [4-III](12_logistic_casestudy.qmd) |
+| `par(mfrow = c(2, 2))` | 그림 배치 | 매 장 |
+| `jitter()`, `adjustcolor()` | 점 흩뜨리기, 투명도 | [1-I](01_slr_estimation.qmd) |
+
+```{r}
+#| label: plot-basics
+#| fig-cap: "boxplot과 mosaicplot — 둘 다 base R"
+#| fig-width: 8
+#| fig-height: 3.8
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+boxplot(ldl ~ snp_LDLR, data = gwc, col = "#dce6f2",
+        xlab = "snp_LDLR", ylab = "LDL")
+mosaicplot(table(gwc$pop, gwc$disease), main = "",
+           xlab = "pop", ylab = "disease", color = c("grey85", "#dd8452"))
+par(op)
+```
+
+## 9. 패키지 한눈에
+
+| 패키지 | 이 강의에서 쓴 함수 | 장 |
+|---|---|---|
+| base / stats | `lm`, `glm`, `aov`, `anova`, `predict`, `nls`, `optim`, `TukeyHSD`, `p.adjust`, … | 전체 |
+| `MASS` | `glm.nb`, `lm.ridge`, `rlm` | [4-V](14_poisson_inference.qmd), [5-II](16_regularized.qmd), [6-I](18_other_models_1.qmd) |
+| `boot` | `cv.glm` | [4-II](11_logistic_inference.qmd) |
+| `glmnet` | `glmnet`, `cv.glmnet` | [5-II](16_regularized.qmd), [5-III](17_varsel_casestudy.qmd) |
+| `leaps` | `regsubsets` | [5-I](15_varsel_basics.qmd) |
+| `mgcv` | `gam`, `s()` | [4-V](14_poisson_inference.qmd), [6-I](18_other_models_1.qmd), [6-II](19_other_models_2.qmd) |
+| `nlme` | `gls`, `lme`, `corAR1`, `corExp` | [6-II](19_other_models_2.qmd) |
+| `quantreg` | `rq` | [6-I](18_other_models_1.qmd) |
+
+- 설치는 [0. R 환경과 데이터](00_setup.qmd)
+- 실무에서 자주 쓰지만 이 강의는 안 쓴 것: `car` (VIF·검정 도구), `lme4` (대규모 혼합모형), `tidyverse` (자료 정리), `ggplot2` (그래픽)

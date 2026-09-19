@@ -1,0 +1,453 @@
+---
+title: "4-III. Case Study: Case-Control GWAS"
+description: "이분형 형질에 대한 유전체 연관분석 — odds ratio, 집단층화, 매개변수 과보정, 예측력"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="4-III. 사례연구: 케이스-컨트롤 GWAS">
+        <meta name="ai-context" content="
+        이 챕터는 로지스틱 회귀의 전 과정을 케이스-컨트롤 GWAS로 실습합니다.
+        자료는 Part 3에서 쓴 KNU-Lipid 코호트의 이분형 형질 disease이며 n = 1494, 사례 386명입니다.
+        SNP 하나씩을 나이·성별과 함께 넣어 대립유전자당 odds ratio를 추정합니다.
+        인과 SNP snp_LDLR의 OR은 1.42 (95% CI 1.18-1.71, p = 0.0002)입니다.
+        귀무 SNP 6개는 모두 유의하지 않습니다. 다중검정 보정은 Bonferroni로 0.05/10 = 0.005를 씁니다.
+        가법 모형과 유전형 모형은 가능도비 검정으로 비교하며 p = 0.82로 가법 모형이 충분합니다.
+        가장 중요한 교훈은 매개변수 과보정입니다.
+        이 자료에서 SNP는 오직 LDL을 통해서만 질병에 영향을 줍니다.
+        따라서 LDL을 보정하면 SNP의 odds ratio가 1.42에서 1.16으로 떨어지고 유의성이 사라집니다(p = 0.14).
+        매개변수를 공변량으로 넣으면 찾으려던 효과를 스스로 지우게 됩니다.
+        예측력은 별개입니다. SNP는 매우 유의하지만 AUC는 0.629에서 0.639로 거의 오르지 않습니다.
+        적합도는 집계 후 이탈도 검정으로 봅니다(17.22, df 17, p = 0.44).
+        Hosmer-Lemeshow 검정은 구간 개수 G에 따라 p가 0.02에서 0.80까지 흔들립니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `4-III. (Logistic) Case Study_The Demographics of Obesity.docx`
+- 원자료의 비만 인구통계 사례를 **케이스-컨트롤 GWAS**로 교체
+- 데이터: `data/gwas_cohort.csv` (Part 3과 동일)
+:::
+
+```{r}
+#| label: setup
+#| include: false
+gw  <- read.csv("data/gwas_cohort.csv")
+gw$pop <- factor(gw$pop)
+gwc <- subset(gw, fh_carrier == 0)
+gwc$geno <- factor(gwc$snp_LDLR, levels = 0:2,
+                   labels = c("AA", "AB", "BB"))
+gwc$agec <- cut(gwc$age, c(0, 45, 55, 65, 100),
+                labels = c("<45", "45-54", "55-64", "65+"))
+snps <- c("snp_LDLR", "snp_LD1", "snp_LD2", "snp_AIM",
+          paste0("snp_N", 1:6))
+```
+
+::: {.callout-important collapse="true"}
+## 이 장의 자료
+
+- Part 3의 KNU-Lipid 코호트를 그대로 씀. 이번 반응변수는 이분형 `disease`
+- 자료를 만든 구조 (참값)
+
+$$\text{logit}\{P(\text{disease})\} = -3.55 + 0.72\,\text{ldl}
++ 0.035(\text{age}-55) + 0.45\,\text{sex}$$
+
+- **SNP는 이 식에 직접 들어 있지 않음**
+  - `snp_LDLR` → `ldl` → `disease` 라는 경로로만 작용
+  - 즉 LDL이 **매개변수(mediator)**
+- 이 구조가 §2.5의 핵심 교훈을 만듦
+:::
+
+## 1. Exploratory Data Analysis
+
+### 1.1 자료 훑어보기
+
+```{r}
+#| label: load
+gw  <- read.csv("data/gwas_cohort.csv")
+gw$pop <- factor(gw$pop)
+gwc <- subset(gw, fh_carrier == 0)     # 3-III에서 제외한 FH 보인자
+c(n = nrow(gwc), cases = sum(gwc$disease),
+  prevalence = mean(gwc$disease))
+```
+
+```{r}
+#| label: eda-tables
+gwc$geno <- factor(gwc$snp_LDLR, levels = 0:2,
+                   labels = c("AA", "AB", "BB"))
+round(rbind(
+  by_genotype = tapply(gwc$disease, gwc$geno, mean),
+  n           = table(gwc$geno)), 3)
+round(tapply(gwc$disease, gwc$sex, mean), 3)
+round(tapply(gwc$disease, gwc$pop, mean), 3)
+```
+
+```{r}
+#| label: eda-continuous
+## 사례군과 대조군의 연속변수 비교
+round(sapply(gwc[, c("age", "bmi", "ldl")],
+             function(v) tapply(v, gwc$disease, mean)), 3)
+```
+
+```{r}
+#| label: mosaic
+#| fig-cap: "모자이크 플롯 — 칸 넓이가 관측 수, 색이 잔차"
+#| fig-width: 8
+#| fig-height: 4
+op <- par(mfrow = c(1, 2), mar = c(3, 3, 3, 1))
+mosaicplot(table(genotype = gwc$geno, disease = gwc$disease),
+           shade = TRUE, main = "유전형 x 질병")
+mosaicplot(table(sex = gwc$sex, disease = gwc$disease),
+           shade = TRUE, main = "성별 x 질병")
+par(op)
+```
+
+::: {.callout-tip}
+## 모자이크 플롯 읽는 법
+- 칸의 **넓이** = 관측 수
+- 칸의 **색** = 독립 가정 하의 기대도수 대비 Pearson 잔차
+  - 파랑 = 기대보다 많음, 빨강 = 기대보다 적음
+  - 회색(테두리 실선) = 잔차가 작아 독립과 어긋나지 않음
+- 유전형이 AA → AB → BB로 갈수록 사례 비율이 커지는 추세가 보임
+:::
+
+### 1.2 케이스-컨트롤 설계에 대한 주의
+
+::: {.callout-warning}
+- 이 자료는 코호트를 통째로 관찰한 것이므로 유병률(0.258)을 추정할 수 있음
+- **실제 케이스-컨트롤 연구**에서는 사례와 대조를 연구자가 골라서 모음
+  - → 절편 $\hat\beta_0$은 해석 불가 (표본 구성이 인위적)
+  - → 예측확률도 모집단 확률이 아님
+  - → **그러나 odds ratio는 그대로 유효함** — 이것이 로지스틱 회귀를 쓰는 결정적 이유
+- 상대위험(risk ratio)은 케이스-컨트롤 설계에서 추정할 수 없음
+:::
+
+## 2. Modeling and Prediction
+
+### 2.1 기저 모형
+
+```{r}
+#| label: base-model
+m0 <- glm(disease ~ age + sex, family = binomial, data = gwc)
+round(summary(m0)$coef, 4)
+round(exp(cbind(OR = coef(m0), confint.default(m0))), 3)
+```
+
+- 나이 1세당 OR 1.043, 남성의 OR 1.55 — 자료를 만든 참값(0.035, 0.45)과 부합
+
+### 2.2 SNP 스캔
+
+- GWAS의 기본 형태: **SNP를 하나씩** 기저 모형에 추가
+
+```{r}
+#| label: snp-scan
+snps <- c("snp_LDLR", "snp_LD1", "snp_LD2", "snp_AIM",
+          paste0("snp_N", 1:6))
+scan1 <- function(s, extra = "") {
+  f  <- as.formula(paste("disease ~", s, "+ age + sex", extra))
+  co <- unname(summary(glm(f, family = binomial, data = gwc))$coef[s, ])
+  c(OR = exp(co[1]), se = co[2], p = co[4])
+}
+res <- as.data.frame(t(sapply(snps, scan1)))
+res[, 1:3] <- round(res[, 1:3], 5)
+res$bonferroni <- ifelse(res$p < 0.05 / length(snps), "pass", "-")
+res[order(res$p), ]
+```
+
+::: {.callout-important}
+- `snp_LDLR` OR $= 1.411$ — 위험 대립유전자 1개당 질병 odds가 1.41배
+- Bonferroni 보정 임계값은 $0.05/10 = 0.005$
+  - LD 블록 3개만 통과, `snp_AIM`과 귀무 SNP 6개는 통과 못 함
+- 실제 GWAS에서는 SNP가 수백만 개 → 임계값이 $5\times10^{-8}$
+:::
+
+```{r}
+#| label: manhattan
+#| fig-cap: "SNP별 -log10(p) — Manhattan plot의 축소판"
+bp <- barplot(-log10(res$p), names.arg = rownames(res), las = 2,
+              ylab = "-log10(p)", col = "#4c72b0", ylim = c(0, 5))
+abline(h = -log10(0.05 / length(snps)), col = "red", lty = 2)
+abline(h = -log10(0.05), lty = 3)
+```
+
+### 2.3 가법 모형과 유전형 모형
+
+```{r}
+#| label: additive-vs-geno
+m_add  <- glm(disease ~ snp_LDLR + age + sex + PC1,
+              family = binomial, data = gwc)
+m_geno <- glm(disease ~ geno + age + sex + PC1,
+              family = binomial, data = gwc)
+round(summary(m_geno)$coef, 4)
+anova(m_add, m_geno, test = "LRT")
+```
+
+- 유전형 모형: AB $= 0.372$, BB $= 0.678 \approx 2 \times 0.372$
+- LRT p-value $= 0.82$ → 가법성에서 벗어난다는 증거 없음
+- **factor 전체의 검정은 Wald가 아니라 LRT로** (4-II §1.4)
+
+### 2.4 집단층화 보정
+
+```{r}
+#| label: pc-adjust
+before <- t(sapply(snps, scan1))
+after  <- t(sapply(snps, scan1, extra = "+ PC1 + PC2 + PC3 + PC4"))
+cmp <- data.frame(OR_before = round(before[, 1], 3),
+                  p_before  = signif(before[, 3], 3),
+                  OR_after  = round(after[, 1], 3),
+                  p_after   = signif(after[, 3], 3))
+cmp[order(cmp$p_before), ]
+```
+
+```{r}
+#| label: pop-effect
+## 집단 자체는 질병과 연관되어 있는가
+round(summary(glm(disease ~ pop + age + sex,
+                  family = binomial, data = gwc))$coef, 4)
+```
+
+::: {.callout-warning}
+## 연속형 형질과 이분형 형질의 차이
+- Part 3에서 `snp_AIM`은 LDL과 **가짜로 강하게** 연관되었음 (p $= 3.5\times10^{-15}$)
+- 그런데 `disease`에서는 보정 전 OR $= 0.986$, p $= 0.87$ — 가짜 연관이 거의 안 보임
+- 이유
+  - 집단은 LDL을 통해서만 질병에 영향을 줌 → 경로가 한 단계 길어져 신호가 희석됨
+  - 이분형 결과는 정보량이 적음 (사례 386건) → 검정력이 낮음
+- 반대로 PC 보정 **후**에 OR $= 0.819$, p $= 0.056$으로 오히려 유의에 가까워짐
+  - 참값은 OR $= 1$ → 이것은 **우연**
+  - SNP 10개 × 모형 2가지를 훑어보면 경계선 p-value는 나오게 되어 있음
+  - Bonferroni 임계값 0.005를 넘지 못함 → 결론을 바꾸지 않음
+:::
+
+### 2.5 매개변수를 보정하면 생기는 일
+
+```{r}
+#| label: mediator
+med <- t(sapply(snps[1:4], scan1,
+                extra = "+ PC1 + PC2 + PC3 + PC4 + ldl"))
+round(cbind(OR_no_ldl = after[1:4, 1], p_no_ldl = after[1:4, 3],
+            OR_with_ldl = med[, 1], p_with_ldl = med[, 3]), 4)
+```
+
+::: {.callout-important}
+## 과보정 (over-adjustment)
+
+| | `snp_LDLR`의 OR | p-value |
+|---|---|---|
+| PC 보정 | 1.436 | $1.3\times10^{-4}$ |
+| PC + **LDL** 보정 | **1.158** | **0.143** |
+
+- LDL을 공변량으로 넣으면 SNP 효과가 사라짐
+- 잘못된 해석: "LDL을 보정하니 SNP 효과가 없다 → SNP는 중요하지 않다"
+- 옳은 해석: **SNP는 LDL을 통해서 작용한다**. LDL을 고정하면 남는 경로가 없음
+- 매개변수(mediator)를 보정하면 **찾으려던 효과를 스스로 지우게 됨**
+:::
+
+```{r}
+#| label: mediation-path
+## 경로를 나눠서 확인
+c(snp_to_ldl = coef(lm(ldl ~ snp_LDLR + age + sex + PC1,
+                       data = gwc))["snp_LDLR"],
+  ldl_to_disease = coef(glm(disease ~ ldl + age + sex,
+                            family = binomial, data = gwc))["ldl"])
+```
+
+- `snp_LDLR` → `ldl` 계수 0.268 (LDL이 mmol/L만큼 오름)
+- `ldl` → `disease` 계수 0.835 (자료를 만들 때 쓴 값은 0.72)
+- 이 두 경로의 곱이 SNP가 질병에 미치는 **간접효과**
+- 로그 odds 척도에서 대략 $0.268 \times 0.835 = 0.224$ — 직접 추정한 0.362와 같은 자릿수
+
+::: {.callout-warning}
+## 무엇을 보정하고 무엇을 보정하지 않는가
+
+| 변수의 역할 | 보정해야 하나 | 이 자료의 예 |
+|---|---|---|
+| 교란변수 (confounder) | **예** — 안 하면 가짜 연관 | 집단 구조 (PC) |
+| 매개변수 (mediator) | **아니오** — 하면 효과가 사라짐 | LDL |
+| 충돌변수 (collider) | **아니오** — 하면 없던 연관이 생김 | — |
+| 무관한 예측변수 | 해도 되고 안 해도 됨 (정밀도만 개선) | BMI |
+
+- 보정 여부는 **자료가 아니라 인과 구조(연구 설계)로 결정**
+- "일단 다 넣고 보자"가 위험한 이유
+:::
+
+### 2.6 예측력
+
+```{r}
+#| label: auc-compare
+auc <- function(p, y) {
+  r  <- rank(p)
+  n1 <- sum(y == 1); n0 <- sum(y == 0)
+  (sum(r[y == 1]) - n1 * (n1 + 1) / 2) / (n1 * n0)
+}
+y <- gwc$disease
+m_cov <- glm(disease ~ age + sex + PC1, family = binomial, data = gwc)
+m_snp <- glm(disease ~ snp_LDLR + age + sex + PC1,
+             family = binomial, data = gwc)
+m_ldl <- glm(disease ~ ldl + age + sex, family = binomial, data = gwc)
+round(c(covariates = auc(fitted(m_cov), y),
+        plus_SNP   = auc(fitted(m_snp), y),
+        plus_LDL   = auc(fitted(m_ldl), y)), 4)
+```
+
+::: {.callout-important}
+## 유의성과 예측력은 다르다
+- `snp_LDLR`은 p $= 1.3\times10^{-4}$로 매우 유의
+- 그런데 AUC는 0.629 → **0.639**, 겨우 0.010 증가
+- 반면 매개변수인 LDL을 직접 넣으면 0.693
+- GWAS에서 흔한 상황 — "발견"에는 충분하지만 "예측"에는 부족
+- 그래서 개별 SNP가 아니라 **PRS**로 수만 개를 합침 (3-IV/V §3)
+:::
+
+```{r}
+#| label: classification
+p <- fitted(m_snp)
+table(predicted = as.integer(p > 0.5), observed = y)
+c(error_rate = mean((p > 0.5) != y), baseline = mean(y))
+```
+
+- 임계값 0.5에서는 사실상 전원을 "비사례"로 찍음 → 기저율과 거의 같은 오분류율
+
+```{r}
+#| label: cv
+set.seed(1)
+fold <- sample(rep(1:10, length.out = nrow(gwc)))
+pv <- numeric(nrow(gwc))
+for (k in 1:10) {
+  fit <- glm(formula(m_snp), family = binomial, data = gwc[fold != k, ])
+  pv[fold == k] <- predict(fit, gwc[fold == k, ], type = "response")
+}
+round(c(in_sample_AUC = auc(p, y), cv_AUC = auc(pv, y)), 4)
+```
+
+```{r}
+#| label: roc-plot
+#| fig-cap: "ROC 곡선 — 공변량만 vs SNP 추가 vs LDL 추가"
+roc_pts <- function(p, y) {
+  o  <- order(p, decreasing = TRUE)
+  tp <- cumsum(y[o] == 1) / sum(y == 1)
+  fp <- cumsum(y[o] == 0) / sum(y == 0)
+  cbind(c(0, fp), c(0, tp))
+}
+plot(roc_pts(fitted(m_cov), y), type = "l", lwd = 2, col = "#999999",
+     xlab = "1 - specificity", ylab = "sensitivity")
+lines(roc_pts(fitted(m_snp), y), lwd = 2, col = "#4c72b0")
+lines(roc_pts(fitted(m_ldl), y), lwd = 2, col = "#c44e52")
+abline(0, 1, lty = 2)
+legend("bottomright", bty = "n", lwd = 2,
+       col = c("#999999", "#4c72b0", "#c44e52"),
+       legend = c("age+sex+PC1", "+ SNP", "+ LDL"))
+```
+
+## 3. Goodness of Fit
+
+### 3.1 집계 후 이탈도 검정
+
+- 개별 0/1 자료로는 적합도 검정을 할 수 없음 (4-II §3.2)
+- 범주형 변수만으로 공변량 패턴을 만들어 집계
+
+```{r}
+#| label: aggregate
+gwc$agec <- cut(gwc$age, c(0, 45, 55, 65, 100),
+                labels = c("<45", "45-54", "55-64", "65+"))
+ag <- aggregate(cbind(cases = gwc$disease, n = rep(1, nrow(gwc))),
+                by = list(geno = gwc$geno, sex = factor(gwc$sex),
+                          agec = gwc$agec), FUN = sum)
+ag <- ag[ag$n > 0, ]
+c(groups = nrow(ag), total = sum(ag$n), min_size = min(ag$n))
+head(ag[order(-ag$n), ], 5)
+```
+
+```{r}
+#| label: grouped-gof
+gg <- glm(cbind(cases, n - cases) ~ geno + sex + agec,
+          family = binomial, data = ag)
+X2 <- sum(residuals(gg, type = "pearson")^2)
+rbind(
+  Deviance = c(stat = gg$deviance, df = gg$df.residual,
+               p = pchisq(gg$deviance, gg$df.residual,
+                          lower.tail = FALSE)),
+  Pearson  = c(stat = X2, df = gg$df.residual,
+               p = pchisq(X2, gg$df.residual, lower.tail = FALSE)))
+c(dispersion = X2 / gg$df.residual)
+```
+
+- 이탈도 17.22 (df 17, p $= 0.44$) → 적합 양호
+- 산포모수 0.96 → 과산포 없음 (자료를 이항분포로 만들었으니 당연)
+
+```{r}
+#| label: grouped-same
+## 집계 전후 계수가 같은지 확인
+gi <- glm(disease ~ geno + factor(sex) + agec,
+          family = binomial, data = gwc)
+round(cbind(grouped = coef(gg), individual = coef(gi)), 5)
+```
+
+### 3.2 Hosmer-Lemeshow 검정의 불안정성
+
+```{r}
+#| label: hoslem
+hoslem <- function(y, p, G = 10) {
+  q  <- cut(p, quantile(p, seq(0, 1, 1 / G)), include.lowest = TRUE)
+  O  <- tapply(y, q, sum)
+  n  <- tapply(y, q, length)
+  E  <- tapply(p, q, sum)
+  X2 <- sum((O - E)^2 / (E * (1 - E / n)))
+  c(X2 = X2, p = pchisq(X2, G - 2, lower.tail = FALSE))
+}
+t(sapply(c(5, 8, 10, 12, 15),
+         function(G) c(G = G, round(hoslem(y, p, G), 4))))
+```
+
+::: {.callout-warning}
+## 구간 개수에 따라 결론이 바뀐다
+- 같은 모형, 같은 자료인데 p-value가 0.02에서 0.80까지 흔들림
+- Hosmer-Lemeshow 검정의 잘 알려진 약점 — $G$의 선택이 임의적임
+- → 집계가 가능하면 **집계 후 이탈도 검정**을 쓰고, HL은 보조 지표로만
+- 보정도 그림(아래)처럼 **눈으로 보는 것**이 더 안정적
+:::
+
+```{r}
+#| label: calibration
+#| fig-cap: "보정도 — 10분위 집단의 예측확률과 관측 사례율"
+q   <- cut(p, quantile(p, seq(0, 1, 0.1)), include.lowest = TRUE)
+obs <- tapply(y, q, mean)
+ex  <- tapply(p, q, mean)
+plot(ex, obs, pch = 19, col = "#4c72b0", xlim = c(0.05, 0.55),
+     ylim = c(0.05, 0.55), xlab = "예측 확률 (집단 평균)",
+     ylab = "관측 사례율")
+abline(0, 1, col = "red", lwd = 2)
+```
+
+### 3.3 잔차 진단
+
+```{r}
+#| label: resid-grouped
+#| fig-cap: "집계 자료의 Pearson 잔차"
+ag$pearson <- residuals(gg, type = "pearson")
+plot(gg$fitted.values, ag$pearson, pch = 19, col = "#4c72b0",
+     cex = sqrt(ag$n) / 6, xlab = "Fitted probability",
+     ylab = "Pearson residual")
+abline(h = c(-2, 0, 2), lty = c(3, 1, 3), col = c(1, "red", 1))
+```
+
+- 집계 자료에서는 잔차가 두 덩어리로 갈라지지 않아 **보기 쉬움**
+- 점 크기 = 집단 크기. $\lvert r_P \rvert > 2$인 집단이 없음
+
+::: {.callout-note}
+## Part 4 전반부 정리
+
+| 개념 | 4-I | 4-II | 4-III |
+|---|---|---|---|
+| 모형·추정 | odds, logit, MLE | | |
+| 추론 | | Wald z, LRT | Bonferroni |
+| 적합도 | | 집계 후 이탈도, HL | HL의 불안정성 |
+| 함정 | OR $\neq$ RR | Simpson's paradox | 매개변수 과보정 |
+| 예측 | | AUC, 교차검증 | 유의성 $\neq$ 예측력 |
+
+- 다음은 **계수형(count) 반응** — 포아송 회귀 (4-IV, 4-V)
+- 자료는 RNA-seq 카운트로, 로그 연결함수와 offset을 다룸
+:::

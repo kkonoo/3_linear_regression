@@ -1,0 +1,406 @@
+---
+title: "3-I. Multiple Linear Regression: Estimation"
+description: "설계행렬, 최소제곱 추정, 그리고 회귀계수의 해석 — 유전형과 공변량을 함께 넣은 LDL 모형"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="3-I. 다중선형회귀: 추정">
+        <meta name="ai-context" content="
+        이 챕터는 설명변수가 여러 개인 다중선형회귀의 추정을 다룹니다.
+        모형은 Y = X * beta + e이며 설계행렬(design matrix) X로 간결하게 표현합니다.
+        최소제곱 추정량은 beta-hat = (X'X)^(-1) X'Y이고, 적합값은 hat matrix H = X(X'X)^(-1)X'를 써서 Y-hat = HY입니다.
+        잔차 자유도는 n-(p+1)이고 MSE = SSE/(n-p-1)이 sigma^2의 추정량입니다.
+        모형은 1차항, 2차항, 교호작용(interaction)을 포함해 유연하게 구성할 수 있습니다.
+        범주형 설명변수는 더미변수로 넣으며, 교호작용이 없으면 절편만 다른 평행한 회귀직선들이 됩니다.
+        해석에서 가장 중요한 구분은 marginal(단순회귀의 계수)과 conditional(다른 변수를 통제한 계수)입니다.
+        또한 인과(causality)와 연관(association)의 구분, controlling/explanatory/predictive 변수의 역할 구분이 핵심입니다.
+        예제는 KNU-Lipid 코호트 1500명의 LDL ~ snp_LDLR + age + sex + bmi + pop 모형입니다.
+        sigma-hat = 0.669, R^2 = 0.278이며 snp_LDLR 계수는 0.337(참 0.28, 3-III에서 FH 6명 때문임이 밝혀짐)입니다.
+        marginal vs conditional 예: BMI 계수가 BMI만 넣으면 0.0583, 집단(pop)을 보정하면 0.0503, 모두 넣으면 0.0476(참 0.042)입니다.
+        Group2가 BMI도 0.70 높고 LDL도 높아서 BMI의 marginal 계수에 집단 효과가 섞여 들어가기 때문입니다.
+        나이와 유전형의 교호작용 검정은 F = 0.14, p = 0.87로 평행선 모형이면 충분합니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `3-I. (Multiple) Estimation and inference.docx`
+- 원자료의 의료기기 매출(meddcor)을 **KNU-Lipid 코호트**로 교체
+- 데이터: `data/gwas_cohort.csv` (1-I 참고)
+:::
+
+## 1. Objectives and Data Examples
+
+### 1.1 목적
+
+- **Prediction** — $X$가 주어졌을 때 response $Y$가 어떻게 될지
+- **Modeling** — $X$(explanatory)와 $Y$(response) 사이의 관계
+- **Testing** — 연관 관계의 유의성 평가
+
+### 1.2 데이터 예제
+
+| 자료 | $Y$ | $X$ | 장 |
+|---|---|---|---|
+| KNU-Lipid | LDL | 유전형, 나이, 성별, BMI, 집단 | 3-I, 3-II |
+| KNU-Lipid | LDL | LD로 묶인 SNP 3개 + 공변량 | 3-III |
+| KNU-Lipid | LDL | 조상정보 SNP, 주성분(PC), SNP 10개 | 3-IV/V |
+
+- 원자료는 의료기기 매출, 주별 SAT 점수, 영화 평점(IMDb)을 씀
+
+## 2. Basic Concepts
+
+### 2.1 기본 개념
+
+- **Data** — $Y$는 하나지만 $X$가 여러 개
+
+$$\{(x_{11},\ldots,x_{1p}), Y_1\},\ \ldots,\ \{(x_{n1},\ldots,x_{np}), Y_n\}$$
+
+- **Model** — $X$의 선형결합으로 $Y$를 추정
+
+$$Y_i = \beta_0 + \beta_1 x_{i1} + \beta_2 x_{i2} + \cdots + \beta_p x_{ip} + \varepsilon_i,
+\quad i = 1,\ldots,n$$
+
+- **Assumptions** — 단순선형회귀와 동일
+
+| 가정 | 식 |
+|---|---|
+| Linearity / Mean Zero | $E(\varepsilon_i) = 0$ |
+| Constant Variance | $\mathrm{Var}(\varepsilon_i) = \sigma^2$ |
+| Independence | $\{\varepsilon_1,\ldots,\varepsilon_n\}$ are independent random variables |
+| Normality | $\varepsilon_i \sim N(0, \sigma^2)$ — 추론 단계에서 추가 |
+
+- **Model parameters**
+
+$$\beta_0,\ \beta_1,\ \ldots,\ \beta_p,\ \sigma^2$$
+
+- 데이터가 아무리 많아도 어디까지나 **estimates**
+
+### 2.2 설계행렬로 표현하기
+
+$$\mathbf{Y} = \mathbf{X}\boldsymbol\beta + \boldsymbol\varepsilon$$
+
+$$\mathbf{X} =
+\begin{bmatrix}
+1 & x_{11} & x_{12} & \cdots & x_{1p} \\
+1 & x_{21} & x_{22} & \cdots & x_{2p} \\
+\vdots & \vdots & \vdots & & \vdots \\
+1 & x_{n1} & x_{n2} & \cdots & x_{np}
+\end{bmatrix},
+\quad
+\mathbf{Y} = \begin{pmatrix} Y_1 \\ Y_2 \\ \vdots \\ Y_n \end{pmatrix},
+\quad
+\boldsymbol\beta = \begin{pmatrix} \beta_0 \\ \beta_1 \\ \vdots \\ \beta_p \end{pmatrix},
+\quad
+\boldsymbol\varepsilon = \begin{pmatrix} \varepsilon_1 \\ \varepsilon_2 \\ \vdots \\ \varepsilon_n \end{pmatrix}$$
+
+- $\mathbf{X}$의 첫 열이 전부 1 → 절편 $\beta_0$에 대응
+- $\mathbf{X}$는 $n \times (p+1)$ 행렬
+
+### 2.3 모형의 유연성 — 주효과와 교호작용
+
+- $X$가 2개일 때 가능한 모형들
+
+| 모형 | 식 | 의미 |
+|---|---|---|
+| **1st order** | $Y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \varepsilon$ | $X$들이 서로 독립적이고 선형 |
+| **2nd order** | $Y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \beta_3 x_1^2 + \beta_4 x_2^2 + \varepsilon$ | $X$가 이차로 연관 |
+| **1st order interaction** | $Y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \beta_3 x_1 x_2 + \varepsilon$ | $X$들 사이에 교호작용 |
+| **2nd order interaction** | $Y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \beta_3 x_1 x_2 + \beta_4 x_1^2 + \beta_5 x_2^2 + \varepsilon$ | 이차 + 교호작용 |
+
+::: {.callout-important}
+- $x_1^2$이나 $x_1 x_2$가 들어가도 **여전히 linear regression**
+- 이유: 회귀계수 $\beta$에 대해 선형이기 때문
+- $x_1^2$, $x_1x_2$를 그냥 새로운 predictor로 보면 됨
+:::
+
+### 2.4 양적 변수와 질적 변수
+
+| 방법 | $X$의 성격 | 개수 |
+|---|---|---|
+| Simple linear regression | 양적(numeric) | 1개 |
+| ANOVA | 질적(categorical) | 1개 |
+| **Multiple linear regression** | 양적 + 질적 혼합 | 여러 개 |
+
+- → 다중회귀는 앞의 두 방법을 모두 포함하는 틀
+
+### 2.5 범주형 X가 섞인 모형
+
+- 상황: $X_1$ = numeric, $X_2$ = 3개 수준의 categorical
+- 범주형은 더미변수 $d_1, d_2$로 표현 (수준 3개 → 더미 2개)
+
+$$Y = \beta_0 + \beta_1 x_1 + \beta_2 d_1 + \beta_3 d_2 + \varepsilon$$
+
+- 각 범주별로 식을 써 보면
+
+| $d_1, d_2$ | 식 |
+|---|---|
+| $d_1=0,\ d_2=0$ | $\beta_0 + \beta_1 x_1$ |
+| $d_1=1,\ d_2=0$ | $(\beta_0 + \beta_2) + \beta_1 x_1$ |
+| $d_1=0,\ d_2=1$ | $(\beta_0 + \beta_3) + \beta_1 x_1$ |
+
+- → **절편만 다르고 기울기는 같은 평행한 직선들** (parallel regression lines)
+
+- 교호작용을 넣으면
+
+$$Y = \beta_0 + \beta_1 x_1 + \beta_2 d_1 + \beta_3 d_2
++ \beta_4 x_1 d_1 + \beta_5 x_1 d_2 + \varepsilon$$
+
+- → 기울기까지 달라져 **평행하지 않은 직선들**
+
+- 예: $X_1$ = 나이, $X_2$ = `snp_LDLR` 유전형 (AA/AB/BB)
+
+```{r}
+#| label: parallel-lines
+#| fig-cap: "나이와 유전형으로 LDL 적합 — 교호작용 없음(평행) vs 있음(비평행)"
+#| fig-width: 9
+#| fig-height: 4
+gw <- read.csv("data/gwas_cohort.csv")
+gw$geno <- factor(gw$snp_LDLR, levels = 0:2,
+                  labels = c("AA", "AB", "BB"))
+m_par <- lm(ldl ~ age + geno, data = gw)      # 평행
+m_int <- lm(ldl ~ age * geno, data = gw)      # 교호작용
+ag <- 30:80; cols <- c("#4c72b0", "#dd8452", "#c44e52")
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+for (m in list(m_par, m_int)) {
+  plot(NA, xlim = range(ag), ylim = c(2.4, 4.4), xlab = "Age",
+       ylab = "Fitted LDL",
+       main = if (identical(m, m_par)) "age + geno" else "age * geno")
+  for (k in 1:3) {
+    nd <- data.frame(age = ag, geno = levels(gw$geno)[k])
+    lines(ag, predict(m, nd), col = cols[k], lwd = 2)
+  }
+  legend("topleft", levels(gw$geno), col = cols, lwd = 2, bty = "n")
+}
+par(op)
+anova(m_par, m_int)
+```
+
+- 교호작용 모형에서도 세 선이 거의 평행 — 교호작용 검정 $F = 0.14$, p $= 0.87$
+- 참값에도 교호작용이 없음 (나이 효과가 유전형과 무관하게 0.013/년)
+- 교호작용이 있었다면 "유전형에 따라 나이 듦의 효과가 다르다" (유전자–환경 상호작용)
+
+## 3. Estimation Method
+
+### 3.1 모수
+
+$$(\beta_0, \beta_1, \beta_2, \ldots, \beta_p),\ \sigma^2$$
+
+- $\sigma^2$이 하나뿐인 이유: **constant variance 가정**
+
+### 3.2 최소제곱 추정
+
+- 단순회귀와 똑같이 오차제곱합을 최소화
+
+$$\sum_{i=1}^{n}\bigl(y_i - (\beta_0 + \beta_1 x_{i1} + \cdots + \beta_p x_{ip})\bigr)^2
+= (\mathbf{Y} - \mathbf{X}\boldsymbol\beta)^T(\mathbf{Y} - \mathbf{X}\boldsymbol\beta)$$
+
+- 실수의 제곱이 행렬에서는 $\mathbf{X}^T\mathbf{X}$ 형태가 됨
+- 미분해서 0 → **정규방정식(normal equation)**
+
+$$\mathbf{X}^T\mathbf{X}\hat{\boldsymbol\beta} = \mathbf{X}^T\mathbf{Y}$$
+
+- $\mathbf{X}^T\mathbf{X}$가 **가역(invertible)** 이면
+
+$$\boxed{\hat{\boldsymbol\beta} = (\mathbf{X}^T\mathbf{X})^{-1}\mathbf{X}^T\mathbf{Y}}$$
+
+::: {.callout-warning}
+- $\mathbf{X}^T\mathbf{X}$가 가역이 아니면 해가 유일하지 않음
+- 원인: 설명변수들이 선형종속 → **완전 다중공선성**
+- Part 3-III에서 다룸
+:::
+
+#### Hat matrix
+
+$$\hat{\mathbf{Y}} = \mathbf{X}\hat{\boldsymbol\beta}
+= \mathbf{X}(\mathbf{X}^T\mathbf{X})^{-1}\mathbf{X}^T\mathbf{Y} = \mathbf{H}\mathbf{Y}$$
+
+- $\mathbf{H} = \mathbf{X}(\mathbf{X}^T\mathbf{X})^{-1}\mathbf{X}^T$ — **hat matrix**
+- 이름의 유래: $\mathbf{Y}$에 모자($\hat{}$)를 씌워 주는 행렬
+
+#### 잔차와 분산 추정
+
+$$\hat{\boldsymbol\varepsilon} = \mathbf{Y} - \mathbf{X}\hat{\boldsymbol\beta}
+= (\mathbf{I} - \mathbf{H})\mathbf{Y}$$
+
+$$\hat\sigma^2 = \frac{\hat{\boldsymbol\varepsilon}^T\hat{\boldsymbol\varepsilon}}{n - p - 1}
+= MSE$$
+
+### 3.3 왜 자유도가 n−(p+1)인가
+
+- 오차 (관측 불가, 참 $\beta$ 사용)
+
+$$\varepsilon_i = y_i - (\beta_0 + \beta_1 x_{i1} + \cdots + \beta_p x_{ip})$$
+
+- 잔차 (관측 가능, 추정 $\hat\beta$ 사용)
+
+$$\hat\varepsilon_i = y_i - (\hat\beta_0 + \hat\beta_1 x_{i1} + \cdots + \hat\beta_p x_{ip})$$
+
+- $\beta$를 모르므로 $\hat\beta$를 써야 함
+- 추정한 모수 개수 = $p + 1$ (설명변수 $p$개 + 절편)
+- → 자유도 $n - (p+1)$ 소모
+
+$$\hat\sigma^2 = MSE \sim \chi^2_{n-p-1}$$
+
+- 단순회귀($p=1$)의 $n-2$가 이 식의 특수한 경우
+
+## 4. Model Interpretation
+
+### 4.1 회귀계수의 의미
+
+| 계수 | 해석 |
+|---|---|
+| $\hat\beta_0$ | 모든 $X$가 0일 때 $Y$의 추정값 |
+| $\hat\beta_j$ | **다른 predictor를 고정**했을 때, $X_j$가 1단위 변하면 $Y$가 변하는 정도 |
+
+- "다른 변수를 고정하고"가 핵심
+- 이 조건이 다중회귀 해석의 거의 전부
+
+### 4.2 Marginal vs. Conditional
+
+| 구분 | 정의 |
+|---|---|
+| **Marginal** | 그 $X$ 하나만 넣고 단순회귀했을 때의 $\beta$ |
+| **Conditional** | 다른 covariate들을 함께 넣고 회귀했을 때의 $\beta$ |
+
+::: {.callout-important}
+- **marginal과 conditional은 다를 수 있음**
+- 크기뿐 아니라 **부호(방향) 자체가 뒤집히기도 함**
+- 뒤에 나올 예제: $\hat\beta_{bmi}$가 marginal 0.0583 → conditional 0.0476
+:::
+
+### 4.3 Causality vs. Association
+
+| 구분 | 설명 |
+|---|---|
+| **Causality** (인과) | 실험 디자인 자체가 인과를 찾을 수 있게 짜여야 함 (시간 순서 등) |
+| **Association** (연관) | 관측 자료에서 단순히 확인 가능 |
+
+- 회귀계수는 기본적으로 **association**
+- 예: $Y = -X_1 + X_2 + \varepsilon$ 이라 할 때
+  - ✗ "$X_1$과 $X_2$가 서로 음의 관계"
+  - ✓ "$X_1$을 고정했을 때, $Y$와 $X_2$의 관계"
+
+### 4.4 설명변수의 세 가지 역할
+
+| 역할 | 목적 |
+|---|---|
+| **Controlling** | $Y$에 대한 bias를 보정 — covariates |
+| **Explanatory** | $Y$를 얼마나 설명하는가 — 관심 대상 |
+| **Predictive** | 설명력과 무관하게 $Y$를 예측할 수 있는가 — 관심 대상 |
+
+- 같은 변수라도 연구 목적에 따라 역할이 달라짐
+- GWAS의 예
+  - 관심 SNP = **explanatory**
+  - 나이·성별·집단(조상 주성분) = **controlling** — 3-IV/V에서 PC를 controlling factor로 씀
+  - 다유전자 위험점수(PRS)의 SNP들 = **predictive** — 인과인지와 무관하게 예측에 쓰임
+
+## 5. Estimation Data Examples
+
+- 자료: KNU-Lipid 코호트 1500명 (`data/gwas_cohort.csv`)
+- 1-I에서는 유전형 하나만 썼던 그 자료 — 이번에는 공변량을 함께 넣음
+- 1-II에서 표시한 극단값 6명은 아직 그대로 둠 (3-III에서 다룸)
+
+```{r}
+#| label: load-gwas
+gw <- read.csv("data/gwas_cohort.csv")
+gw$pop <- factor(gw$pop)
+vars <- c("ldl", "snp_LDLR", "age", "sex", "bmi", "pop")
+str(gw[, vars])
+```
+
+```{r}
+#| label: fit-mlr
+model <- lm(ldl ~ snp_LDLR + age + sex + bmi + pop, data = gw)
+summary(model)
+```
+
+- 읽는 법
+  - `pop`이 2수준 factor → 더미 1개(`popGroup2`)가 자동 생성, 기준 범주는 Group1
+  - 잔차 자유도 = $1500 - (5+1) = 1494$
+  - $\hat\sigma = 0.669$, $R^2 = 0.278$
+
+| 계수 | 추정치 | 참값 | 해석 (다른 변수 고정) |
+|---|---|---|---|
+| `snp_LDLR` | 0.337 | 0.28 | 위험 대립유전자 1개당 |
+| `age` | 0.0142 | 0.013 | 1년당 |
+| `sex` | 0.275 | 0.33 | 남성 − 여성 |
+| `bmi` | 0.0476 | 0.042 | BMI 1당 |
+| `popGroup2` | 0.506 | 0.52 | Group2 − Group1 |
+
+- 대부분 참값 근처, `snp_LDLR`만 위로 치우침 — 1-I과 같은 이유 (3-III)
+
+### 5.1 Marginal vs. Conditional — 실제로 비교
+
+```{r}
+#| label: marginal-vs-conditional
+## marginal: BMI만 넣은 단순회귀
+coef(lm(ldl ~ bmi, data = gw))["bmi"]
+
+## 집단만 보정
+coef(lm(ldl ~ bmi + pop, data = gw))["bmi"]
+
+## conditional: 다른 변수를 모두 넣은 모형
+coef(model)["bmi"]
+```
+
+| 구분 | $\hat\beta_{bmi}$ | 해석 |
+|---|---|---|
+| **Marginal** | **0.0583** | 다른 변수를 **고려하지 않고** BMI만 봤을 때의 증가폭 |
+| 집단 보정 | 0.0503 | 같은 집단 안에서 BMI가 1 높을 때 |
+| **Conditional** | **0.0476** | 유전형·나이·성별·집단을 전부 고정한 BMI 효과 |
+| 참값 | 0.042 | |
+
+```{r}
+#| label: why-differ
+## 집단별 평균 BMI와 LDL
+aggregate(cbind(bmi, ldl) ~ pop, data = gw, FUN = mean)
+```
+
+- 차이가 나는 이유
+  - Group2는 BMI가 평균 0.70 높고, LDL도 0.52 높음 (BMI와 무관한 집단 효과)
+  - BMI만 넣으면 → "BMI가 높은 사람 = Group2일 가능성이 높은 사람" → 집단 효과가 BMI 계수에 **섞여 들어감**
+  - 집단을 넣으면 그 몫이 빠져 참값에 가까워짐
+- 이런 변수(집단)를 **교란변수(confounder)** 라고 부름 — 3-IV/V의 집단층화가 극단적인 예
+
+### 5.2 행렬 계산으로 확인
+
+```{r}
+#| label: matrix-check
+X <- model.matrix(model)          # 설계행렬
+Y <- gw$ldl
+dim(X)
+
+## beta-hat = (X'X)^(-1) X'Y
+beta <- solve(t(X) %*% X) %*% t(X) %*% Y
+cbind(matrix = round(as.numeric(beta), 4), lm = round(coef(model), 4))
+```
+
+```{r}
+#| label: hat-matrix
+## hat matrix의 성질
+H <- X %*% solve(t(X) %*% X) %*% t(X)
+c(idempotent = max(abs(H %*% H - H)),       # H^2 = H 이면 0
+  trace      = sum(diag(H)))                 # tr(H) = p+1
+```
+
+- $\mathbf{H}$는 **멱등(idempotent)**: $\mathbf{H}^2 = \mathbf{H}$ ($1500 \times 1500$ 행렬에서 차이가 기계 정밀도 수준)
+- $\mathrm{tr}(\mathbf{H}) = p+1 = 6$ — 추정한 모수의 개수와 일치
+
+```{r}
+#| label: mse-check
+n <- nrow(gw); p <- ncol(X) - 1
+SSE <- sum(residuals(model)^2)
+c(MSE = SSE / (n - p - 1), sigma2_hat = summary(model)$sigma^2,
+  df = n - p - 1)
+```
+
+::: {.callout-tip}
+- 설명변수를 여러 개 넣으면 관심 있는 $X$의 추정이 **정밀해짐**
+  - $\hat\sigma$: 0.757 (1-I 단순회귀) → 0.669
+  - `snp_LDLR`의 표준오차: 0.0311 → 0.0275
+- 이유: 나이·성별·BMI·집단이 설명하는 변동이 오차에서 빠지기 때문
+- 단, 무작정 넣으면 다중공선성 문제가 생김 (Part 3-III)
+:::

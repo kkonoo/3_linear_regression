@@ -1,0 +1,599 @@
+---
+title: "4-II. Logistic Regression: Inference, Model Assessment and Classification"
+description: "Wald 검정과 가능도비 검정, 잔차와 적합도, 과산포, 분류와 교차검증"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="4-II. 로지스틱 회귀: 추론·적합도·분류">
+        <meta name="ai-context" content="
+        이 챕터는 로지스틱 회귀의 추론, 모형 적합도 평가, 분류를 다룹니다. 자료는 METABRIC입니다.
+        MLE는 근사적으로 정규분포를 따르므로 검정통계량이 t가 아니라 z입니다. 대표본이 아니면 1종 오류가 커집니다.
+        전체 회귀의 유의성은 가능도비 검정(LRT)으로 봅니다. 통계량은 이탈도 차이 D = -2(l_reduced - l_full)이고
+        자유도 q인 카이제곱을 따릅니다. 이 자료에서는 D = 239.41, df = 7입니다.
+        개별 계수는 Wald 검정(z = beta-hat / se)으로 봅니다.
+        로지스틱의 잔차는 네 종류입니다: response, working, Pearson, deviance.
+        deviance 잔차의 제곱합이 곧 이탈도입니다.
+        중요한 점은 반복(replication)이 없는 개별 이분형 자료에서는 이탈도가 카이제곱을 따르지 않아
+        적합도 검정을 할 수 없다는 것입니다. 같은 공변량 패턴끼리 집계해야 검정이 유효합니다.
+        집계 후 이탈도는 16.92 (df 14, p = 0.26), Pearson 통계량은 13.53 (p = 0.49)이며 과산포는 없습니다.
+        Hosmer-Lemeshow 검정은 8.98 (df 8, p = 0.34)입니다.
+        적합도(GOF)와 예측력은 다른 개념입니다.
+        ERBB2 발현은 단변량에서 계수 +0.166이지만 HER2 상태를 보정하면 -0.171로 부호가 뒤집힙니다.
+        분류에서는 임계값 0.5의 오분류율 0.173이 전부 생존으로 찍는 기저율 0.187과 거의 같습니다.
+        AUC는 0.772이고 10-fold 교차검증 AUC는 0.764입니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `4-II. (Logistic) Statistical Inference, Model Assessment and Classification.docx`
+- 데이터: `data/metabric.csv`
+:::
+
+```{r}
+#| label: setup
+#| include: false
+mb <- read.csv("data/metabric.csv", check.names = FALSE)
+keep <- (mb$Survival_time >= 60) |
+  (mb$Vital_status == "Died of Disease" & mb$Survival_time < 60)
+keep[is.na(keep)] <- FALSE
+d <- mb[keep, ]
+d$death5 <- as.integer(d$Vital_status == "Died of Disease" &
+                         d$Survival_time < 60)
+vars <- c("death5", "Age_at_diagnosis", "Tumour_size",
+          "Neoplasm_histologic_grade", "Lymph_nodes_examined_positive",
+          "ER_status", "HER2_status", "Chemotherapy",
+          "Nottingham_prognostic_index", "ESR1", "ERBB2", "TP53")
+bc <- na.omit(d[, c("Patient_ID", vars)])
+bc$grade <- factor(bc$Neoplasm_histologic_grade)
+bc$nodes <- bc$Lymph_nodes_examined_positive
+bc$ER    <- factor(bc$ER_status, levels = c("Negative", "Positive"))
+bc$chemo <- factor(bc$Chemotherapy, levels = c("NO", "YES"))
+bc$np    <- factor(ifelse(bc$nodes > 0, "Positive", "Negative"))
+g <- glm(death5 ~ Age_at_diagnosis + Tumour_size + grade + nodes + ER +
+           HER2_status, family = binomial, data = bc)
+```
+
+## 1. Statistical Inference
+
+### 1.1 추정량의 근사 표본분포
+
+- 선형회귀: $\hat\beta_j$가 **정확히** t분포
+- 로지스틱: 닫힌 해가 없고 정규 오차도 없음 → **근사적으로** 정규
+
+$$\hat\beta_j \ \dot\sim\ N\bigl(\beta_j,\ V(\hat\beta_j)\bigr),
+\qquad
+z = \frac{\hat\beta_j - \beta_j}{se(\hat\beta_j)} \ \dot\sim\ N(0,1)$$
+
+| | 선형회귀 | 로지스틱 회귀 |
+|---|---|---|
+| 추정 | 최소제곱 (닫힌 해) | MLE (수치해) |
+| 표본분포 | 정확히 $t_{n-p-1}$ | 근사적으로 $N(0,1)$ |
+| 검정통계량 | $t$ | $z$ (Wald) |
+| 근거 | 정규 오차 가정 | 대표본 이론 |
+
+::: {.callout-warning}
+## 왜 t가 아니라 z인가
+- t분포는 "$\sigma^2$을 $MSE$로 추정하면서 생긴 추가 불확실성"을 반영한 것
+- 로지스틱에는 따로 추정할 $\sigma^2$이 없음 (분산이 $p(1-p)$로 결정됨)
+- → 자유도를 소모하는 척도모수가 없으므로 z
+- **대표본 근사이므로 표본이 작으면 1종 오류가 명목수준 $\alpha$보다 커짐**
+  - 사건 수가 적을 때 특히 위험 — 변수 하나당 사건 10건이 흔히 쓰는 경험칙
+:::
+
+### 1.2 신뢰구간
+
+$$\hat\beta_j \pm z_{\alpha/2}\, se(\hat\beta_j)
+\quad\Longrightarrow\quad
+\text{OR의 CI} = \exp\bigl\{\hat\beta_j \pm z_{\alpha/2}\, se(\hat\beta_j)\bigr\}$$
+
+- **계수 척도에서 구간을 만든 뒤 지수를 취함** (반대로 하면 안 됨)
+- 계수 구간이 0을 포함 $\iff$ OR 구간이 1을 포함
+
+### 1.3 전체 회귀 — 가능도비 검정
+
+$$H_0: \beta_1 = \cdots = \beta_q = 0$$
+
+- 완전모형과 축소모형의 로그가능도를 비교
+
+$$D = -2\bigl\{\ell(\text{reduced}) - \ell(\text{full})\bigr\}
+= \text{Deviance}_{\text{reduced}} - \text{Deviance}_{\text{full}}
+\ \dot\sim\ \chi^2_q$$
+
+- **이탈도(deviance)** — 포화모형 대비 로그가능도 손실의 2배
+
+$$\text{Deviance} = -2\bigl\{\ell(\text{model}) - \ell(\text{saturated})\bigr\}$$
+
+- 이분형 자료에서 포화모형은 $\ell = 0$ → Deviance $= -2\ell(\text{model})$
+- 선형회귀의 전체 F-검정에 해당하는 자리
+
+### 1.4 개별 계수 — Wald 검정
+
+$$H_0: \beta_j = 0 \quad\text{vs.}\quad H_a: \beta_j \neq 0,
+\qquad z = \frac{\hat\beta_j}{se(\hat\beta_j)}$$
+
+$$\text{p-value} = 2\,P(Z > |z|)$$
+
+::: {.callout-tip}
+## Wald와 LRT 중 무엇을 쓰나
+- 둘은 대표본에서 같은 결론에 수렴하지만 **소표본에서는 다를 수 있음**
+- LRT가 일반적으로 더 신뢰할 만함 (특히 계수가 클 때 Wald는 검정력이 떨어짐 — Hauck-Donner 현상)
+- 범주가 여러 개인 factor 전체를 검정할 때는 **반드시 LRT** (Wald는 수준별로만 나옴)
+:::
+
+## 2. Data Example I — Statistical Inference
+
+```{r}
+#| label: load
+mb <- read.csv("data/metabric.csv", check.names = FALSE)
+keep <- (mb$Survival_time >= 60) |
+  (mb$Vital_status == "Died of Disease" & mb$Survival_time < 60)
+keep[is.na(keep)] <- FALSE
+d <- mb[keep, ]
+d$death5 <- as.integer(d$Vital_status == "Died of Disease" &
+                         d$Survival_time < 60)
+vars <- c("death5", "Age_at_diagnosis", "Tumour_size",
+          "Neoplasm_histologic_grade", "Lymph_nodes_examined_positive",
+          "ER_status", "HER2_status", "Chemotherapy",
+          "Nottingham_prognostic_index", "ESR1", "ERBB2", "TP53")
+bc <- na.omit(d[, c("Patient_ID", vars)])
+bc$grade <- factor(bc$Neoplasm_histologic_grade)
+bc$nodes <- bc$Lymph_nodes_examined_positive
+bc$ER    <- factor(bc$ER_status, levels = c("Negative", "Positive"))
+bc$np    <- factor(ifelse(bc$nodes > 0, "Positive", "Negative"))
+
+g <- glm(death5 ~ Age_at_diagnosis + Tumour_size + grade + nodes + ER +
+           HER2_status, family = binomial, data = bc)
+round(summary(g)$coef, 4)
+```
+
+### 2.1 전체 회귀의 유의성
+
+```{r}
+#| label: lrt-overall
+c(null_dev = g$null.deviance, resid_dev = g$deviance,
+  df = g$df.null - g$df.residual)
+
+D <- g$null.deviance - g$deviance
+c(D = D, p = pchisq(D, g$df.null - g$df.residual, lower.tail = FALSE))
+```
+
+```{r}
+#| label: lrt-loglik
+## 로그가능도 차이로도 같은 값이 나오는지
+g0 <- glm(death5 ~ 1, family = binomial, data = bc)
+c(from_loglik = 2 * as.numeric(logLik(g) - logLik(g0)), from_dev = D)
+```
+
+- $D = 239.41$, 자유도 7, p-value $\approx 5\times10^{-48}$ → 전체 모형 유의
+
+### 2.2 순차 이탈도 — 선형회귀의 순차제곱합에 대응
+
+```{r}
+#| label: anova-seq
+anova(g, test = "LRT")
+```
+
+::: {.callout-important}
+- Part 3의 `anova(lm)`과 마찬가지로 **변수를 넣은 순서에 의존**
+- 나이가 첫 줄에서는 이탈도 2.67(p = 0.10)이지만, 이것은 "아무것도 없을 때 나이의 기여"
+- `summary()`의 Wald 검정은 "나머지 전부가 들어간 뒤"를 봄 → 두 결과가 다를 수 있음
+:::
+
+### 2.3 부분 가능도비 검정 — 유전자 발현을 추가할 가치가 있는가
+
+```{r}
+#| label: lrt-partial
+g_gene <- update(g, . ~ . + ESR1 + ERBB2 + TP53)
+anova(g, g_gene, test = "LRT")
+```
+
+- $D = 11.70$, 자유도 3, p-value $= 0.0085$
+- 임상변수를 모두 넣은 뒤에도 유전자 발현이 추가 정보를 가짐
+
+### 2.4 신뢰구간
+
+```{r}
+#| label: ci
+round(cbind(beta = coef(g), confint.default(g)), 4)
+round(exp(cbind(OR = coef(g), confint.default(g))), 3)
+```
+
+## 3. Model Fit Assessment
+
+### 3.1 로지스틱 회귀의 잔차
+
+- 선형회귀에서 쓰던 $y - \hat y$는 여기서 **response residual**일 뿐
+
+| 종류 | 정의 | 용도 |
+|---|---|---|
+| Response | $y_i - \hat p_i$ | 직관적이나 분산이 제각각 |
+| Working | IRLS 마지막 반복의 작업잔차 | 내부 계산용 |
+| Pearson | $\dfrac{y_i - \hat p_i}{\sqrt{\hat p_i(1-\hat p_i)}}$ | 분산으로 표준화 |
+| Deviance | $\mathrm{sign}(y_i - \hat p_i)\sqrt{d_i}$ | 제곱합이 이탈도 |
+
+$$\sum_{i=1}^{n} d_i^2 = \text{Deviance}, \qquad
+\sum_{i=1}^{n} r_{P,i}^2 = X^2 \ (\text{Pearson } \chi^2)$$
+
+```{r}
+#| label: resid-types
+r_res <- residuals(g, type = "response")
+r_pea <- residuals(g, type = "pearson")
+r_dev <- residuals(g, type = "deviance")
+round(rbind(response = range(r_res), pearson = range(r_pea),
+            deviance = range(r_dev)), 3)
+
+c(sum_dev2 = sum(r_dev^2), deviance = g$deviance,
+  pearson_X2 = sum(r_pea^2), df = g$df.residual)
+```
+
+### 3.2 반복(replication)의 유무가 결정적이다
+
+| | 자료 형태 | 이탈도의 분포 |
+|---|---|---|
+| 반복 없음 | 공변량 패턴마다 $Y$가 1개 (0/1) | $\chi^2$를 **따르지 않음** |
+| 반복 있음 | 공변량 패턴마다 $y$건/$n$명 (이항) | $n_i$가 충분히 크면 $\chi^2_{\,G-p-1}$ |
+
+::: {.callout-warning}
+## 흔한 실수
+- 개별 0/1 자료에 대해 `pchisq(deviance, df)`로 적합도 검정을 하는 것
+- 이 자료에서 그렇게 하면 p-value가 1로 나오지만 **아무 의미 없음**
+- 이유: 표본이 늘어도 관측치 하나당 정보가 늘지 않아 점근이론이 성립하지 않음
+:::
+
+```{r}
+#| label: naive-gof
+## 하면 안 되는 계산 (참고용)
+pchisq(g$deviance, g$df.residual, lower.tail = FALSE)
+```
+
+### 3.3 GOF 검정 — 집계한 뒤에
+
+- 같은 공변량 패턴을 가진 사람끼리 묶어 $y$건/$n$명 형태로 만듦
+- 연속형 변수가 있으면 패턴이 거의 안 겹치므로 **범주형만 남긴 모형**으로 검정
+
+### 3.4 적합도와 예측력은 다르다
+
+| | 묻는 것 | 지표 |
+|---|---|---|
+| Goodness of fit | 모형 가정이 자료와 맞는가 | 이탈도·Pearson GOF, Hosmer-Lemeshow |
+| Predictive power | $X$가 $Y$를 잘 맞히는가 | 오분류율, 민감도·특이도, AUC |
+
+- 가정이 완벽해도 $X$에 정보가 없으면 예측은 못 함
+- 반대로 가정이 조금 어긋나도 예측은 잘할 수 있음
+- → **둘을 따로 보고해야 함**
+
+### 3.5 과산포
+
+$$\hat\phi = \frac{X^2}{n - p - 1}$$
+
+- 이항분포가 맞다면 $\phi \approx 1$
+- $\hat\phi > 1$ (과산포) — 관측된 변동이 이항분포가 허용하는 것보다 큼
+  - 원인: 군집 구조, 누락된 변수, 개체 간 이질성
+  - 대응: `family = quasibinomial` — 표준오차를 $\sqrt{\hat\phi}$배로 부풀림
+- 과산포는 **집계 자료에서만 의미가 있음** (개별 0/1 자료에서는 정의상 계산 불가)
+
+### 3.6 연결함수 오지정
+
+| 연결함수 | $g(p)$ | 특징 |
+|---|---|---|
+| logit | $\log\{p/(1-p)\}$ | 계수가 log odds ratio — 해석이 쉬움 |
+| probit | $\Phi^{-1}(p)$ | 잠재 정규변수 모형. logit과 거의 같은 적합 |
+| cloglog | $\log\{-\log(1-p)\}$ | 비대칭 — 한쪽 꼬리가 빠르게 포화 |
+
+- 셋의 적합이 크게 다르면 연결함수를 잘못 골랐을 수 있음
+- 실무에서는 해석 때문에 거의 항상 logit을 씀
+
+## 4. Data Example II — Model Fit Assessment
+
+### 4.1 시각적 진단
+
+```{r}
+#| label: diag-plots
+#| fig-cap: "로지스틱 회귀의 진단 플롯"
+#| fig-width: 9
+#| fig-height: 3.5
+op <- par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+plot(fitted(g), r_dev, pch = 20, cex = 0.4, xlab = "Fitted probability",
+     ylab = "Deviance residual", main = "적합확률 vs 잔차")
+abline(h = 0, col = "red")
+lines(lowess(fitted(g), r_dev), col = "#4c72b0", lwd = 2)
+
+plot(bc$nodes, r_dev, pch = 20, cex = 0.4, xlab = "Positive nodes",
+     ylab = "Deviance residual", main = "선형성")
+abline(h = 0, col = "red")
+lines(lowess(bc$nodes, r_dev), col = "#4c72b0", lwd = 2)
+
+qqnorm(r_dev, pch = 20, cex = 0.4, main = "이탈도 잔차 QQ")
+qqline(r_dev, col = "red")
+par(op)
+```
+
+::: {.callout-warning}
+- 개별 0/1 자료의 잔차 그림은 **두 개의 곡선 띠**로 갈라져 보임 ($y=0$과 $y=1$)
+- 점 하나하나를 보는 것이 아니라 **평활선(lowess)이 0 근처에 있는지**를 봄
+- QQ-plot도 정규성 판단에 쓸 수 없음 — 이탈도 잔차가 정규분포일 이유가 없음
+:::
+
+### 4.2 집계 후 적합도 검정
+
+```{r}
+#| label: aggregate
+## 범주형 변수만으로 공변량 패턴을 만듦
+ag <- aggregate(cbind(events = bc$death5, n = rep(1, nrow(bc))),
+                by = list(grade = bc$grade, ER = bc$ER,
+                          HER2 = bc$HER2_status, node = bc$np),
+                FUN = sum)
+ag <- ag[ag$n > 0, ]
+c(groups = nrow(ag), total = sum(ag$n), min_size = min(ag$n))
+head(ag[order(-ag$n), ], 5)
+```
+
+```{r}
+#| label: grouped-fit
+gg <- glm(cbind(events, n - events) ~ grade + ER + HER2 + node,
+          family = binomial, data = ag)
+round(summary(gg)$coef, 4)
+```
+
+```{r}
+#| label: grouped-same
+## 개별 자료로 같은 모형을 적합하면 계수가 같다
+gi <- glm(death5 ~ grade + ER + HER2_status + np,
+          family = binomial, data = bc)
+round(cbind(grouped = coef(gg), individual = coef(gi)), 6)
+c(dev_grouped = gg$deviance, dev_individual = gi$deviance)
+```
+
+::: {.callout-important}
+- **계수와 표준오차는 같지만 이탈도는 완전히 다름** (16.92 vs 1417.97)
+- 집계 자료의 이탈도만이 적합도 검정에 쓸 수 있음
+:::
+
+```{r}
+#| label: grouped-gof
+X2 <- sum(residuals(gg, type = "pearson")^2)
+rbind(
+  Deviance = c(stat = gg$deviance, df = gg$df.residual,
+               p = pchisq(gg$deviance, gg$df.residual,
+                          lower.tail = FALSE)),
+  Pearson  = c(stat = X2, df = gg$df.residual,
+               p = pchisq(X2, gg$df.residual, lower.tail = FALSE)))
+
+c(dispersion = X2 / gg$df.residual)
+```
+
+- 이탈도 16.92 (df 14, p $= 0.26$), Pearson 13.53 (p $= 0.49$) → **적합 양호**
+- 산포모수 추정치 0.97 → 과산포 없음
+
+```{r}
+#| label: grouped-resid
+## 가장 안 맞는 집단 확인
+ag$pearson <- round(residuals(gg, type = "pearson"), 3)
+head(ag[order(-abs(ag$pearson)), ], 4)
+```
+
+### 4.3 Hosmer-Lemeshow 검정
+
+- 연속형 변수가 있어 집계가 불가능할 때의 대안
+- 적합확률로 10분위 집단을 만들어 관측 사건 수와 기대 사건 수를 비교
+
+$$\hat C = \sum_{k=1}^{G}
+\frac{(O_k - E_k)^2}{E_k(1 - E_k/n_k)} \ \dot\sim\ \chi^2_{G-2}$$
+
+```{r}
+#| label: hosmer
+hoslem <- function(y, p, G = 10) {
+  q  <- cut(p, quantile(p, seq(0, 1, 1 / G)), include.lowest = TRUE)
+  O  <- tapply(y, q, sum)
+  n  <- tapply(y, q, length)
+  E  <- tapply(p, q, sum)
+  X2 <- sum((O - E)^2 / (E * (1 - E / n)))
+  c(X2 = X2, df = G - 2, p = pchisq(X2, G - 2, lower.tail = FALSE))
+}
+round(hoslem(bc$death5, fitted(g)), 4)
+```
+
+```{r}
+#| label: calibration
+#| fig-cap: "보정도 — 10분위 집단의 기대 확률 vs 관측 비율"
+q  <- cut(fitted(g), quantile(fitted(g), seq(0, 1, 0.1)),
+          include.lowest = TRUE)
+obs <- tapply(bc$death5, q, mean)
+exp_ <- tapply(fitted(g), q, mean)
+plot(exp_, obs, pch = 19, col = "#4c72b0", xlim = c(0, 0.6),
+     ylim = c(0, 0.6), xlab = "예측 확률 (집단 평균)",
+     ylab = "관측 사망률")
+abline(0, 1, col = "red", lwd = 2)
+```
+
+- $\hat C = 8.98$ (df 8, p $= 0.34$) → 예측확률이 잘 보정되어 있음
+
+### 4.4 연결함수를 바꿔 보기
+
+```{r}
+#| label: links
+f <- death5 ~ Age_at_diagnosis + Tumour_size + grade + nodes + ER +
+  HER2_status
+m_logit  <- glm(f, family = binomial(link = "logit"),  data = bc)
+m_probit <- glm(f, family = binomial(link = "probit"), data = bc)
+round(rbind(logit  = c(dev = m_logit$deviance,  AIC = AIC(m_logit)),
+            probit = c(dev = m_probit$deviance, AIC = AIC(m_probit))), 2)
+cor(fitted(m_logit), fitted(m_probit))
+```
+
+- 이탈도 차이가 3 미만, 적합확률의 상관은 0.9994 → 실질적으로 같은 모형
+- → 해석이 쉬운 logit을 씀
+
+### 4.5 Simpson's paradox — 부호가 뒤집히는 사례
+
+```{r}
+#| label: simpson-marginal
+round(summary(glm(death5 ~ ERBB2, family = binomial,
+                  data = bc))$coef, 4)
+```
+
+```{r}
+#| label: simpson-conditional
+round(summary(glm(death5 ~ ERBB2 + HER2_status, family = binomial,
+                  data = bc))$coef, 4)
+```
+
+::: {.callout-important}
+## 같은 변수, 반대 부호
+
+| 모형 | $\hat\beta_{ERBB2}$ | p-value | 해석 |
+|---|---|---|---|
+| marginal | **+0.1664** | 0.0001 | 발현이 높을수록 나쁨 |
+| + HER2 상태 | **-0.1709** | 0.0282 | 발현이 높을수록 좋음 |
+
+- 둘 다 유의한데 부호가 반대 → Simpson's paradox
+:::
+
+```{r}
+#| label: simpson-why
+## 왜 그런가 — HER2 상태가 두 변수를 동시에 끌고 있음
+rbind(ERBB2_mean = tapply(bc$ERBB2, bc$HER2_status, mean),
+      death_rate = tapply(bc$death5, bc$HER2_status, mean),
+      n          = table(bc$HER2_status))
+```
+
+- HER2 양성군은 `ERBB2` 발현이 훨씬 높고(13.67 vs 10.34) 사망률도 훨씬 높음(0.348 vs 0.165)
+- → 보정하지 않으면 `ERBB2`가 HER2 상태의 **대리변수** 노릇을 함
+- Part 3의 집단층화(`snp_AIM`)와 정확히 같은 구조
+
+```{r}
+#| label: simpson-strata
+#| fig-cap: "층 안에서 본 ERBB2와 사망률"
+for (lv in c("Negative", "Positive")) {
+  s <- subset(bc, HER2_status == lv)
+  b <- coef(glm(death5 ~ ERBB2, family = binomial, data = s))[2]
+  cat(sprintf("HER2 %-8s n=%4d  beta=%7.4f\n", lv, nrow(s), b))
+}
+```
+
+::: {.callout-warning}
+- 층별 기울기가 $-0.245$와 $+0.401$로 **서로 부호가 다름**
+- 즉 단순한 Simpson's paradox가 아니라 **상호작용**이 있는 상황
+- 가산 모형 `ERBB2 + HER2_status`는 두 층의 기울기를 하나로 평균해 버림
+  - 표본이 큰 HER2 음성군(n = 1465)이 결과를 지배
+- 교훈: 부호가 뒤집히면 보정으로 끝내지 말고 **층별로 나눠 봐야 함**
+:::
+
+## 5. Classification
+
+### 5.1 분류 규칙
+
+$$\hat y_i = \begin{cases}
+1 & \hat p_i > c \\
+0 & \hat p_i \le c
+\end{cases}$$
+
+- 임계값 $c$는 **분석자가 정함** — 0.5가 자동으로 옳은 값이 아님
+- 사건이 드물면 0.5를 넘는 사람이 거의 없어 모두 0으로 찍게 됨
+
+### 5.2 오분류율과 기저율
+
+```{r}
+#| label: confusion-half
+p <- fitted(g)
+y <- bc$death5
+table(predicted = as.integer(p > 0.5), observed = y)
+c(error_rate = mean((p > 0.5) != y), baseline = mean(y))
+```
+
+::: {.callout-important}
+- 임계값 0.5의 오분류율 0.173
+- **전원 "생존"이라고 찍으면** 오분류율 0.187
+- → 정교한 모형이 무조건 찍기보다 겨우 1.4%p 나음
+- 오분류율만 보고 모형을 평가하면 안 되는 이유 (class imbalance)
+:::
+
+```{r}
+#| label: confusion-prev
+## 임계값을 사건 유병률로 낮추면
+cc <- mean(y)
+tt <- table(predicted = as.integer(p > cc), observed = y)
+tt
+c(threshold = cc,
+  sensitivity = tt[2, 2] / sum(tt[, 2]),
+  specificity = tt[1, 1] / sum(tt[, 1]),
+  error_rate  = mean((p > cc) != y))
+```
+
+- 민감도가 0.17에서 0.66으로 올라가는 대신 오분류율은 0.173 → 0.282로 나빠짐
+- **어느 오류가 더 비싼가**에 따라 임계값을 정해야 함
+
+### 5.3 ROC 곡선과 AUC
+
+```{r}
+#| label: roc
+roc_pts <- function(p, y) {
+  o <- order(p, decreasing = TRUE)
+  tp <- cumsum(y[o] == 1) / sum(y == 1)
+  fp <- cumsum(y[o] == 0) / sum(y == 0)
+  cbind(fp = c(0, fp), tp = c(0, tp))
+}
+auc <- function(p, y) {
+  r <- rank(p)
+  n1 <- sum(y == 1); n0 <- sum(y == 0)
+  (sum(r[y == 1]) - n1 * (n1 + 1) / 2) / (n1 * n0)
+}
+c(AUC_full = auc(p, y),
+  AUC_NPI  = auc(fitted(glm(death5 ~ Nottingham_prognostic_index,
+                            family = binomial, data = bc)), y))
+```
+
+```{r}
+#| label: roc-plot
+#| fig-cap: "ROC 곡선"
+pts <- roc_pts(p, y)
+plot(pts, type = "l", lwd = 2, col = "#4c72b0",
+     xlab = "1 - specificity", ylab = "sensitivity")
+abline(0, 1, lty = 2)
+legend("bottomright", bty = "n",
+       legend = sprintf("AUC = %.3f", auc(p, y)))
+```
+
+- AUC — 무작위로 고른 사망자 1명과 생존자 1명 중 **사망자의 예측확률이 더 클 확률**
+- 0.5 = 동전 던지기, 1.0 = 완벽. 임계값과 무관하다는 것이 장점
+
+### 5.4 교차검증
+
+- 지금까지의 성능은 **모형을 만든 자료로 평가한 것** → 낙관적
+- 10-fold 교차검증으로 실제 오차율을 추정
+
+```{r}
+#| label: cv
+set.seed(1)
+fold <- sample(rep(1:10, length.out = nrow(bc)))
+pv <- numeric(nrow(bc))
+for (k in 1:10) {
+  fit <- glm(formula(g), family = binomial, data = bc[fold != k, ])
+  pv[fold == k] <- predict(fit, bc[fold == k, ], type = "response")
+}
+round(rbind(
+  in_sample = c(error = mean((p > 0.5) != y),  AUC = auc(p, y)),
+  cv_10fold = c(error = mean((pv > 0.5) != y), AUC = auc(pv, y))), 4)
+```
+
+- 교차검증 AUC 0.764 vs 자체 AUC 0.772 — 낙관 편향이 작음
+- 표본이 크고 모수가 적어 과적합이 심하지 않은 상황
+
+```{r}
+#| label: cv-boot
+## boot 패키지로도 같은 계산
+library(boot)
+set.seed(1)
+cost <- function(r, pi) mean(abs(r - pi) > 0.5)
+round(cv.glm(bc, g, cost = cost, K = 10)$delta, 4)
+```
+
+::: {.callout-note}
+## 다음 장으로
+- 4-III에서는 이 모든 절차를 **케이스-컨트롤 GWAS**로 한 번에 적용
+- Part 3의 집단층화 문제가 로지스틱 회귀에서 어떻게 나타나는지 봄
+:::

@@ -1,0 +1,485 @@
+---
+title: "5-III. Case Study: Polygenic Risk Score"
+description: "GWAS 요약통계로 다유전자 위험점수 만들기 — C+T, Lasso, 그리고 lassosum 직접 구현"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="5-III. 사례연구: 다유전자 위험점수(PRS)">
+        <meta name="ai-context" content="
+        이 챕터는 변수선택의 전 과정을 다유전자 위험점수(PRS) 만들기로 실습합니다.
+        자료는 KNU-Lipid 확장판, SNP 2000개, 반응변수는 총콜레스테롤이며 참 유전율은 0.385입니다.
+        훈련 1000명으로 GWAS 요약통계를 만들고, 검증 247명으로 조율모수를 고르고, 검정 247명으로 최종 보고합니다.
+        핵심 제약은 실제 GWAS에서는 개체 수준 유전형이 공개되지 않고 요약통계만 공개된다는 점입니다.
+        요약통계의 Z값과 표본크기만으로 표준화 상관 r을 복원할 수 있습니다: r = Z / sqrt(N + Z^2).
+        이 자료에서 그렇게 복원한 r은 개체 자료로 계산한 r과 최대 오차 2.6e-05로 일치합니다.
+        전통적 방법은 C+T(clumping and thresholding)입니다. LD로 묶인 SNP를 쳐내고 p값 문턱을 조율합니다.
+        검증에서 고른 문턱 T = 0.01, SNP 45개로 검정 증가 R2는 0.171입니다.
+        lassosum은 요약통계 기반 Lasso입니다.
+        목적함수는 (1-s)b'Rb - 2b'r + s||b||^2 + 2*lambda*||b||_1 이고 R은 참조패널의 블록 대각 LD 행렬입니다.
+        R의 대각이 1이므로 좌표하강 갱신은 b_j = soft(r_j - (1-s) * sum_{k!=j} R_jk b_k, lambda) 로 간단합니다.
+        한 블록만 놓고 s=0으로 풀면 glmnet과 소수점 아래까지 일치합니다.
+        검증에서 고른 s = 0.2, lambda = 0.06, SNP 143개로 검정 증가 R2는 0.230입니다.
+        개체 수준 Lasso는 0.274로 가장 좋습니다.
+        즉 요약통계만으로도 개체 자료 성능의 84%를 회수하며 C+T보다 확실히 낫습니다.
+        실제 도구로는 lassosum, lassosum2(bigsnpr), LDpred2가 있습니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `5-III. (Model selection) Data Analysis Example.docx`
+- 원자료의 응급실 의료비(ED Healthcare Costs) 사례를 **PRS 구축**으로 교체
+- 데이터: `data/gwas_geno_wide.csv.gz`, `data/gwas_tc.csv`, `data/gwas_geno_truth.csv`
+:::
+
+```{r}
+#| label: setup
+#| include: false
+library(glmnet)
+G   <- as.matrix(read.csv(gzfile("data/gwas_geno_wide.csv.gz"),
+                          row.names = 1))
+tru <- read.csv("data/gwas_geno_truth.csv", row.names = 1)
+ph  <- read.csv("data/gwas_tc.csv")
+co  <- read.csv("data/gwas_cohort.csv")
+keep <- co$fh_carrier == 0
+G <- G[keep, ]; y <- ph$tc[keep]; co <- co[keep, ]
+set.seed(7); idx <- sample(nrow(G), 1000)
+rest <- setdiff(seq_len(nrow(G)), idx)
+set.seed(8); va <- sample(rest, 247); te <- setdiff(rest, va)
+Gtr <- G[idx, ]; Gva <- G[va, ]; Gte <- G[te, ]
+dtr <- co[idx, ]; dva <- co[va, ]; dte <- co[te, ]
+ytr <- y[idx];   yva <- y[va];   yte <- y[te]
+mc  <- lm(ytr ~ age + sex + bmi + PC1, data = dtr)
+rtr <- resid(mc)
+```
+
+## 1. Introduction
+
+### 1.1 다유전자 위험점수란
+
+$$PRS_i = \sum_{j=1}^{p} w_j\, g_{ij}$$
+
+- $g_{ij}$ — 개인 $i$의 SNP $j$ 유전형 (0/1/2)
+- $w_j$ — 가중치. **이것을 어떻게 정하느냐가 방법의 차이**
+- 3-IV/V에서 만든 PRS는 SNP 10개짜리 장난감이었음. 여기서는 2000개
+
+### 1.2 실제 GWAS의 결정적 제약
+
+::: {.callout-important}
+- 개체 수준 유전형은 **개인정보** → 공개되지 않음
+- 공개되는 것은 **요약통계** — SNP마다 (효과크기, 표준오차, p값, 표본크기)
+- 따라서 PRS 방법은 대부분 **요약통계만으로 작동해야 함**
+- 5-II의 `glmnet`은 $\mathbf{X}$ 전체를 요구함 → 그대로는 못 씀
+:::
+
+- 이 장에서 하는 일
+  1. 훈련자료로 GWAS를 돌려 **요약통계를 만든다** (이후 개체자료는 없다고 친다)
+  2. 요약통계만으로 PRS를 만든다 — C+T, 그리고 lassosum
+  3. 개체자료를 다 쓴 Lasso와 비교해 **얼마나 손해인지** 본다
+
+### 1.3 설계 — 자료를 셋으로 나눈다
+
+| 집합 | 크기 | 역할 |
+|---|---|---|
+| Training | 1000 | GWAS 요약통계 생성 |
+| **Validation** | 247 | 조율모수($T$, $\lambda$, $s$) 선택 |
+| Test | 247 | 최종 성능 보고 (한 번만 씀) |
+
+::: {.callout-warning}
+- 5-I에서 본 선택편향 때문에 **조율과 평가를 같은 자료로 하면 안 됨**
+- 검정자료는 마지막에 한 번만 건드림
+:::
+
+```{r}
+#| label: split
+G   <- as.matrix(read.csv(gzfile("data/gwas_geno_wide.csv.gz"),
+                          row.names = 1))
+tru <- read.csv("data/gwas_geno_truth.csv", row.names = 1)
+ph  <- read.csv("data/gwas_tc.csv")
+co  <- read.csv("data/gwas_cohort.csv")
+keep <- co$fh_carrier == 0
+G <- G[keep, ]; y <- ph$tc[keep]; co <- co[keep, ]
+
+set.seed(7); idx  <- sample(nrow(G), 1000)
+rest <- setdiff(seq_len(nrow(G)), idx)
+set.seed(8); va <- sample(rest, 247); te <- setdiff(rest, va)
+c(train = length(idx), valid = length(va), test = length(te))
+
+Gtr <- G[idx, ]; Gva <- G[va, ]; Gte <- G[te, ]
+dtr <- co[idx, ]; dva <- co[va, ]; dte <- co[te, ]
+ytr <- y[idx];   yva <- y[va];   yte <- y[te]
+mc  <- lm(ytr ~ age + sex + bmi + PC1, data = dtr)
+rtr <- resid(mc)
+```
+
+```{r}
+#| label: metric
+## 평가 지표: 공변량만 넣은 모형 대비 증가 결정계수
+incR2 <- function(p, yy, dd) {
+  summary(lm(yy ~ p + age + sex + bmi + PC1, data = dd))$r.squared -
+    summary(lm(yy ~ age + sex + bmi + PC1, data = dd))$r.squared
+}
+```
+
+## 2. GWAS 요약통계 만들기
+
+```{r}
+#| label: gwas
+ss <- t(apply(Gtr, 2, function(g) {
+  s <- summary(lm(rtr ~ g))$coef
+  if (nrow(s) < 2) c(0, 1, 0, 1) else s[2, c(1, 2, 3, 4)]
+}))
+colnames(ss) <- c("beta", "se", "z", "p")
+N <- nrow(Gtr)
+head(round(ss[order(ss[, "p"])[1:6], ], 4))
+c(genomewide = sum(ss[, "p"] < 5e-8),
+  bonferroni = sum(ss[, "p"] < 0.05 / ncol(Gtr)))
+```
+
+```{r}
+#| label: manhattan-qq
+#| fig-cap: "Manhattan plot과 QQ plot"
+#| fig-width: 9
+#| fig-height: 4
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+plot(-log10(ss[, "p"]), pch = 20, cex = 0.5,
+     col = ifelse(tru$is_causal == 1, "#c44e52", "#999999"),
+     xlab = "SNP 순서", ylab = "-log10(p)", main = "Manhattan")
+abline(h = -log10(0.05 / ncol(Gtr)), lty = 2)
+legend("topleft", bty = "n", pch = 20, col = c("#c44e52", "#999999"),
+       legend = c("참 인과", "귀무"))
+
+obs <- sort(-log10(ss[, "p"]))
+exp_ <- sort(-log10(ppoints(nrow(ss))))
+plot(exp_, obs, pch = 20, cex = 0.5, col = "#4c72b0",
+     xlab = "기대 -log10(p)", ylab = "관측 -log10(p)", main = "QQ")
+abline(0, 1, col = "red")
+chisq <- qchisq(ss[, "p"], 1, lower.tail = FALSE)
+c(lambda_GC = median(chisq) / qchisq(0.5, 1))
+```
+
+- $\lambda_{GC}$가 1보다 조금 큼 → 전반적 팽창은 없고 실제 신호가 있다는 뜻
+- 유의한 SNP는 소수지만, PRS는 **유의하지 않은 SNP까지 모아** 쓴다
+
+### 2.1 요약통계만으로 상관계수 복원하기
+
+- 벌점회귀에 필요한 것은 표준화 상관 $r_j = \mathrm{cor}(x_j, y)$
+- 개체 자료가 없어도 Z값과 표본크기로 복원됨
+
+$$r_j = \frac{Z_j}{\sqrt{N + Z_j^2}}$$
+
+```{r}
+#| label: r-from-summary
+Xs <- scale(Gtr)
+ys <- as.numeric(scale(rtr))
+
+r_individual <- as.numeric(crossprod(Xs, ys) / N)   # 개체자료 필요
+r_summary    <- ss[, "z"] / sqrt(N + ss[, "z"]^2)   # 요약통계만
+c(correlation = cor(r_individual, r_summary),
+  max_abs_diff = max(abs(r_individual - r_summary)))
+```
+
+::: {.callout-important}
+- 두 값이 $2.6\times10^{-5}$ 안에서 일치
+- → **개체 유전형 없이도 회귀에 필요한 정보를 얻을 수 있음**
+- 이것이 요약통계 기반 방법이 성립하는 근거
+:::
+
+```{r}
+#| label: scaling
+ctr <- attr(Xs, "scaled:center"); sdv <- attr(Xs, "scaled:scale")
+Xva <- scale(Gva, center = ctr, scale = sdv)
+Xte <- scale(Gte, center = ctr, scale = sdv)
+```
+
+## 3. 방법 1 — C+T (Clumping and Thresholding)
+
+- GWAS PRS의 오랜 표준
+  1. **Clumping** — p값이 가장 작은 SNP를 남기고, 그것과 $r^2 > 0.1$인 이웃을 버림
+  2. **Thresholding** — p값이 $T$보다 작은 SNP만 남김
+  3. 가중치는 한계 효과크기 $\hat\beta_j$를 그대로 씀
+
+```{r}
+#| label: clumping
+ixl <- split(seq_len(ncol(Gtr)), tru$block)   # LD 블록
+clump <- function(r2thr = 0.1) {
+  ord <- order(ss[, "p"])
+  banned <- rep(FALSE, ncol(Gtr)); kept <- c()
+  for (j in ord) {
+    if (banned[j]) next
+    kept <- c(kept, j)
+    ix <- ixl[[as.character(tru$block[j])]]
+    banned[ix[cor(Xs[, j], Xs[, ix])^2 > r2thr]] <- TRUE
+    banned[j] <- TRUE
+  }
+  kept
+}
+kp <- clump()
+c(before = ncol(Gtr), after_clumping = length(kp))
+```
+
+```{r}
+#| label: thresholding
+Ts <- c(5e-8, 1e-6, 1e-4, 1e-3, 0.01, 0.05, 0.1, 0.5, 1)
+ct <- t(sapply(Ts, function(T) {
+  s <- kp[ss[kp, "p"] < T]
+  if (length(s) == 0) return(c(T = T, nSNP = 0, valid = NA, test = NA))
+  pv <- as.numeric(Gva[, s, drop = FALSE] %*% ss[s, "beta"])
+  pt <- as.numeric(Gte[, s, drop = FALSE] %*% ss[s, "beta"])
+  c(T = T, nSNP = length(s),
+    valid = incR2(pv, yva, dva), test = incR2(pt, yte, dte))
+}))
+round(ct, 4)
+bT <- Ts[which.max(ct[, "valid"])]
+c(best_T = bT, test_incR2 = ct[which.max(ct[, "valid"]), "test"])
+```
+
+```{r}
+#| label: ct-plot
+#| fig-cap: "문턱 T에 따른 성능 — 검증으로 고르고 검정으로 보고"
+plot(log10(ct[, "T"]), ct[, "valid"], type = "b", pch = 19,
+     col = "#4c72b0", ylim = range(ct[, 3:4], na.rm = TRUE),
+     xlab = "log10(T)", ylab = "증가 결정계수")
+lines(log10(ct[, "T"]), ct[, "test"], type = "b", pch = 19,
+      col = "#c44e52")
+abline(v = log10(bT), lty = 2)
+legend("bottomleft", bty = "n", pch = 19, col = c("#4c72b0", "#c44e52"),
+       legend = c("검증", "검정"))
+```
+
+::: {.callout-warning}
+- 최적 $T$가 $5\times10^{-8}$이 아니라 **0.01** — 유의하지 않은 SNP를 많이 넣는 편이 나음
+- 발견(discovery)의 기준과 예측(prediction)의 기준이 다르다는 뜻
+- C+T의 약점: LD로 묶인 SNP를 **버리기만 함**. 그 정보를 쓰지 못함
+:::
+
+## 4. 방법 2 — 요약통계 기반 Lasso (lassosum)
+
+### 4.1 목적함수
+
+- 5-II의 Lasso를 표준화 척도로 다시 쓰면 (상수항 제외)
+
+$$\|\mathbf{y} - \mathbf{X}\boldsymbol\beta\|^2 / n
+\;\propto\; \boldsymbol\beta^T\mathbf{R}\boldsymbol\beta
+- 2\boldsymbol\beta^T\mathbf{r} + \text{const},
+\qquad
+\mathbf{R} = \frac{\mathbf{X}^T\mathbf{X}}{n},\quad
+\mathbf{r} = \frac{\mathbf{X}^T\mathbf{y}}{n}$$
+
+::: {.callout-important}
+- **개체 자료 $\mathbf{X}$, $\mathbf{y}$는 $\mathbf{R}$과 $\mathbf{r}$을 통해서만 들어옴**
+- $\mathbf{r}$ — 요약통계에서 복원 (§2.1)
+- $\mathbf{R}$ — 같은 조상 집단의 **참조패널**에서 계산 (1000 Genomes 등)
+- → 개체 자료 없이 Lasso를 풀 수 있음
+:::
+
+- lassosum (Mak et al. 2017)의 목적함수
+
+$$f(\boldsymbol\beta) = (1-s)\,\boldsymbol\beta^T\mathbf{R}\boldsymbol\beta
+- 2\,\boldsymbol\beta^T\mathbf{r}
++ s\,\|\boldsymbol\beta\|_2^2
++ 2\lambda\|\boldsymbol\beta\|_1$$
+
+| 모수 | 역할 |
+|---|---|
+| $\lambda$ | Lasso 벌점 — 희소성 |
+| $s \in [0,1)$ | $\mathbf{R}$을 $(1-s)\mathbf{R} + s\mathbf{I}$로 당김 |
+
+- $s$가 필요한 이유
+  - 참조패널의 $\mathbf{R}$은 표본 추정치라 **잡음이 있고 양정부호가 아닐 수 있음**
+  - $s\mathbf{I}$를 섞으면 안정화됨 (Ridge를 조금 섞는 것과 같음)
+  - $s = 0$이면 순수 Lasso, $s \to 1$이면 SNP를 독립으로 취급
+
+### 4.2 좌표하강 갱신식
+
+- $\beta_j$에 대해 미분하면 ($R_{jj} = 1$이므로)
+
+$$\beta_j \leftarrow
+S\Bigl( r_j - (1-s)\sum_{k \ne j} R_{jk}\beta_k,\ \lambda \Bigr),
+\qquad
+S(z, \lambda) = \mathrm{sign}(z)(\lvert z\rvert - \lambda)_+$$
+
+- 5-II의 연성임계가 그대로 나옴
+- 블록 대각이면 **블록 안에서만** 합을 구하면 됨 → $p$가 수백만이어도 계산 가능
+
+```{r}
+#| label: lassosum-impl
+soft <- function(z, l) sign(z) * pmax(abs(z) - l, 0)
+
+## 참조패널의 블록별 LD 행렬 (여기서는 훈련자료로 대신함)
+Rl <- lapply(ixl, function(ix) cor(Xs[, ix, drop = FALSE]))
+
+lassosum <- function(r, lambda, s = 0.2, iter = 100, tol = 1e-7) {
+  b <- numeric(length(r))
+  for (it in 1:iter) {
+    old <- b
+    for (k in seq_along(ixl)) {
+      ix <- ixl[[k]]; R <- Rl[[k]]; bb <- b[ix]
+      for (j in seq_along(ix)) {
+        bb[j] <- soft(r[ix[j]] - (1 - s) * (sum(R[j, ] * bb) - bb[j]),
+                      lambda)
+      }
+      b[ix] <- bb
+    }
+    if (max(abs(b - old)) < tol) break
+  }
+  b
+}
+```
+
+::: {.callout-warning}
+## 참조패널에 대한 주의
+- 원칙적으로 $\mathbf{R}$은 **discovery 코호트와 독립인 외부 패널**에서 계산해야 함
+- 이 장에서는 자료가 작아 훈련자료로 대신함 — 실제로는 1000 Genomes 등을 씀
+- 참조패널의 조상이 GWAS 집단과 다르면 PRS 성능이 크게 떨어짐
+  (PRS의 인종 간 이식성 문제)
+:::
+
+### 4.3 구현이 맞는지 확인 — 한 블록에서 glmnet과 대조
+
+```{r}
+#| label: verify-one-block
+ix  <- ixl[["1"]]                       # 블록 1만
+R1  <- cor(Xs[, ix]); r1 <- r_summary[ix]; lam <- 0.03
+b <- numeric(length(ix))
+for (it in 1:2000) {
+  old <- b
+  for (j in seq_along(ix)) b[j] <- soft(r1[j] - (sum(R1[j, ] * b) - b[j]),
+                                        lam)
+  if (max(abs(b - old)) < 1e-12) break
+}
+g1 <- as.numeric(coef(glmnet(Xs[, ix], ys, alpha = 1, lambda = lam,
+                             standardize = FALSE, intercept = FALSE,
+                             thresh = 1e-16)))[-1]
+c(iterations = it, max_abs_diff = max(abs(b - g1)))
+round(rbind(lassosum = b[1:8], glmnet = g1[1:8]), 6)
+```
+
+::: {.callout-important}
+- 한 블록 안에서 $s = 0$으로 풀면 **개체 자료를 쓴 `glmnet`과 소수점 아래까지 일치**
+- 요약통계만 썼는데 같은 답이 나옴 — 이것이 lassosum의 요점
+- 전체 유전체에서는 블록 간 LD를 0으로 **근사**하므로 완전히 같지는 않음
+:::
+
+### 4.4 조율모수 선택
+
+```{r}
+#| label: lassosum-grid
+grid <- expand.grid(s = c(0.2, 0.5, 0.9),
+                    lambda = c(0.02, 0.03, 0.045, 0.06, 0.08, 0.10))
+res <- t(apply(grid, 1, function(g) {
+  b <- lassosum(r_summary, g[["lambda"]], g[["s"]])
+  c(s = g[["s"]], lambda = g[["lambda"]], nSNP = sum(b != 0),
+    valid = incR2(as.numeric(Xva %*% b), yva, dva),
+    test  = incR2(as.numeric(Xte %*% b), yte, dte))
+}))
+round(res, 4)
+bi <- which.max(res[, "valid"])
+round(res[bi, ], 4)
+```
+
+```{r}
+#| label: lassosum-plot
+#| fig-cap: "lassosum 조율 — 검증자료 기준"
+sv <- unique(res[, "s"])
+plot(NA, xlim = range(res[, "lambda"]), ylim = range(res[, "valid"]),
+     xlab = "lambda", ylab = "검증 증가 결정계수")
+for (i in seq_along(sv)) {
+  z <- res[res[, "s"] == sv[i], ]
+  lines(z[, "lambda"], z[, "valid"], type = "b", pch = 19,
+        col = c("#4c72b0", "#dd8452", "#55a868")[i])
+}
+legend("bottomleft", bty = "n", pch = 19, lty = 1,
+       col = c("#4c72b0", "#dd8452", "#55a868"),
+       legend = paste("s =", sv))
+```
+
+- $s$가 작을수록(LD를 충실히 반영할수록) 좋음
+- $\lambda = 0.06$에서 SNP 143개 → 검정 증가 $R^2$ **0.230**
+
+## 5. 방법 3 — 개체 수준 Lasso (상한선)
+
+```{r}
+#| label: individual-lasso
+set.seed(1)
+cvl <- cv.glmnet(Xs, ys, alpha = 1, nfolds = 10, standardize = FALSE)
+ind <- t(sapply(c("lambda.min", "lambda.1se"), function(s) {
+  b <- as.numeric(coef(cvl, s = s))[-1]
+  c(lambda = cvl[[s]], nSNP = sum(b != 0),
+    valid = incR2(as.numeric(Xva %*% b), yva, dva),
+    test  = incR2(as.numeric(Xte %*% b), yte, dte))
+}))
+round(ind, 4)
+```
+
+- 개체 유전형을 전부 쓸 수 있을 때가 **상한선**
+
+## 6. Findings
+
+```{r}
+#| label: final-table
+best_ct <- ct[which.max(ct[, "valid"]), ]
+best_ls <- res[bi, ]
+final <- rbind(
+  `C+T`             = c(best_ct["nSNP"], best_ct["test"]),
+  `lassosum`        = c(best_ls["nSNP"], best_ls["test"]),
+  `Lasso (개체자료)` = c(ind["lambda.min", "nSNP"],
+                      ind["lambda.min", "test"]))
+colnames(final) <- c("nSNP", "test_incR2")
+round(final, 4)
+c(true_h2 = 0.385)
+```
+
+::: {.callout-important}
+## 결론
+
+| 방법 | 필요한 자료 | SNP 수 | 검정 증가 $R^2$ | $h^2$ 대비 |
+|---|---|---|---|---|
+| C+T ($T = 0.01$) | 요약통계 | 45 | 0.171 | 44% |
+| **lassosum** ($s=0.2,\ \lambda=0.06$) | **요약통계** | 143 | **0.230** | 60% |
+| Lasso | 개체 유전형 | 163 | 0.274 | 71% |
+| (참 유전율) | — | — | 0.385 | 100% |
+
+- **lassosum이 C+T를 확실히 이김** — LD를 버리는 대신 모형에 넣기 때문
+- 요약통계만으로 개체 자료 성능의 **84%**(0.230/0.274)를 회수
+- 어떤 방법도 $h^2$에는 도달하지 못함
+  - 훈련 표본이 1000명뿐 → 작은 효과의 SNP를 추정할 수 없음
+  - PRS 성능은 **discovery GWAS의 표본크기**에 거의 전적으로 달려 있음
+:::
+
+::: {.callout-tip}
+## 실제로 쓰는 도구
+| 도구 | 접근 |
+|---|---|
+| `PRSice-2` | C+T 자동화 |
+| `lassosum` (Mak et al. 2017) | 요약통계 Lasso — 이 장에서 구현한 것 |
+| `bigsnpr::snp_lassosum2` | lassosum의 개선판, LDpred2와 같은 패키지 |
+| `bigsnpr::snp_ldpred2_*` | 베이즈 접근 (사전분포로 희소성 부여) |
+| `PRS-CS`, `SBayesR` | 연속 축소 사전분포 |
+
+- 이 장에서 쓴 LD 블록은 참값을 알고 있었지만, 실제로는 참조패널에서 추정함
+  (예: Berisa-Pickrell 블록, 또는 슬라이딩 윈도)
+:::
+
+::: {.callout-warning}
+## PRS를 해석할 때
+- PRS의 계수는 **인과 효과가 아님** — LD를 통한 연관의 합
+- 집단이 다르면 LD 구조도 다름 → **다른 조상 집단에 그대로 쓰면 성능이 급락**
+- 개인 수준 위험 예측에는 아직 $R^2$가 낮음. 집단 층화나 연구 도구로서의 가치가 큼
+- Part 3-IV/V의 교훈이 그대로 적용됨: 유의성 $\ne$ 예측력
+:::
+
+::: {.callout-note}
+## Part 5 정리
+
+| | 5-I | 5-II | 5-III |
+|---|---|---|---|
+| 접근 | 부분집합 탐색 | 계수 축소 | 요약통계 활용 |
+| 도구 | `leaps`, `step` | `glmnet` | 직접 구현 |
+| 한계 | $2^p$, 불안정, 선택편향 | 개체 자료 필요 | 참조패널 의존 |
+
+- 다음 Part 6은 회귀의 **가정이 깨질 때** — 등분산·독립성 위배, 비선형
+:::

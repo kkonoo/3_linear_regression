@@ -1,0 +1,486 @@
+---
+title: "5-I. Basics of Variable Selection"
+description: "고차원 문제, 편향-분산 절충, Cp·AIC·BIC·LOOCV, 부분집합 탐색과 stepwise — GWAS 2000개 SNP"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="5-I. 변수선택의 기초">
+        <meta name="ai-context" content="
+        이 챕터는 변수선택의 기초를 다루며, 실습 자료는 KNU-Lipid 코호트를 확장한 SNP 2000개 패널입니다.
+        반응변수는 다유전자 형질인 총콜레스테롤 tc이고 인과 SNP는 40개, 유전율은 0.385입니다.
+        훈련 1000명, 검정 494명으로 나눕니다. p = 2000 > n = 1000이므로 최소제곱은 아예 풀리지 않습니다.
+        변수선택의 세 가지 동기는 고차원, 다중공선성, 설명과 예측의 목적 차이입니다.
+        핵심 개념은 편향-분산 절충입니다. 변수를 늘리면 편향은 줄고 분산은 늘어납니다.
+        훈련위험은 항상 낙관적이므로 복잡도 벌점을 더해 보정합니다.
+        Mallow's Cp, AIC, BIC, LOOCV가 그 방법이며 BIC의 벌점 log(n)이 가장 큽니다.
+        이 자료에서 모형 크기를 1에서 990까지 늘리면 훈련 R2는 0.088에서 0.997로 단조증가하지만
+        검정 R2는 k = 50 근처에서 0.227로 정점을 찍고 k = 990에서 -34.5까지 무너집니다.
+        전수탐색은 2^p 개의 모형을 봐야 하며 p = 2000이면 602자리 수입니다.
+        후보 15개로 줄이면 leaps로 전수탐색이 가능하고 BIC가 고른 8개는 모두 참 인과 SNP였습니다.
+        가장 중요한 경고는 선택편향입니다. 같은 자료로 고르고 같은 자료로 평가하면
+        반응변수를 무작위로 섞어도 훈련 R2가 평균 0.135나 나옵니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `5-I. (Model selection) Basics of Variable Selection.docx`
+- 원자료의 SAT / 파산(bankruptcy) 예제를 **GWAS 다유전자 형질**로 교체
+- 데이터: `data/gwas_geno_wide.csv.gz`, `data/gwas_tc.csv`, `data/gwas_geno_truth.csv`
+- 생성 스크립트: `data-raw/simulate_genotypes.R`
+:::
+
+::: {.callout-important collapse="true"}
+## 실습 자료 — KNU-Lipid 코호트 확장판
+
+- Part 3~4에서 쓰던 **같은 사람들**에게 SNP 2000개를 유전형 분석했다고 보면 됨
+- 새 반응변수: **총콜레스테롤 `tc`** (mmol/L) — 다유전자 형질
+
+| 파일 | 내용 |
+|---|---|
+| `gwas_geno_wide.csv.gz` | 유전형 1500 × 2000 (0/1/2) |
+| `gwas_tc.csv` | `iid`, `tc` |
+| `gwas_geno_truth.csv` | SNP별 `block`, `maf`, `beta_true`, `is_causal` |
+
+- 구조
+  - LD 블록 100개 × 20개 SNP. 블록 안에서만 상관, 블록끼리는 거의 무상관
+  - Part 3의 `snp_LDLR`, `snp_LD1`, `snp_LD2`, `snp_AIM`도 그대로 들어 있음 (`block = 0`)
+  - 인과 SNP **40개** (큰 효과 4개 + 중간 효과 36개), 유전율 $h^2 = 0.385$
+- Part 5 세 장이 모두 이 자료를 씀
+:::
+
+```{r}
+#| label: setup
+#| include: false
+G   <- as.matrix(read.csv(gzfile("data/gwas_geno_wide.csv.gz"),
+                          row.names = 1))
+tru <- read.csv("data/gwas_geno_truth.csv", row.names = 1)
+ph  <- read.csv("data/gwas_tc.csv")
+co  <- read.csv("data/gwas_cohort.csv")
+keep <- co$fh_carrier == 0
+G <- G[keep, ]; y <- ph$tc[keep]; co <- co[keep, ]
+set.seed(7)
+idx <- sample(nrow(G), 1000)
+Gtr <- G[idx, ];  Gte <- G[-idx, ]
+dtr <- co[idx, ]; dte <- co[-idx, ]
+ytr <- y[idx];    yte <- y[-idx]
+mc  <- lm(ytr ~ age + sex + bmi + PC1, data = dtr)
+rtr <- resid(mc)
+rte <- yte - as.numeric(predict(mc, newdata = dte))
+```
+
+## 1. Introduction
+
+### 1.1 변수선택이 필요한 세 가지 이유
+
+| 문제 | 내용 | 이 자료에서 |
+|---|---|---|
+| High dimensionality | $X$가 너무 많으면 해석도 어렵고 적합도 안 됨 | $p = 2000 > n = 1000$ |
+| Multicollinearity | $X$가 많으면 그중 상관된 것이 반드시 생김 | LD 블록 100개 |
+| 설명 vs 예측 | 목적이 다르면 넣을 변수도 다름 | 인과 변이 찾기 vs PRS 만들기 |
+
+::: {.callout-important}
+- $p > n$이면 $\mathbf{X}^T\mathbf{X}$가 **특이행렬** → 최소제곱해가 유일하지 않음
+- Part 3-III의 다중공선성이 극단으로 간 상황
+- 변수를 고르거나(이 장), 계수를 줄이거나(5-II) 해야 함
+:::
+
+### 1.2 설명이냐 예측이냐
+
+| | 설명 (explanation) | 예측 (prediction) |
+|---|---|---|
+| 묻는 것 | 어느 변수가 $Y$와 연관되는가 | 새 사람의 $Y$를 얼마나 맞히는가 |
+| 좋은 모형 | 해석 가능, 변수 수가 적음 | 검정자료 오차가 작음 |
+| GWAS에서 | 인과 변이 발굴, fine-mapping | PRS |
+| 상관된 변수 | 어느 것이 진짜인지 가려야 함 | 아무거나 하나 쓰면 됨 |
+
+- 같은 자료라도 목적이 다르면 **다른 모형이 정답**
+
+### 1.3 변수선택의 여섯 가지 주의사항
+
+1. **교란변수와 설명변수를 구분할 것** — 교란변수는 반드시 넣고, 설명변수만 고름
+2. **미리 정한 관심변수(targeted)는 선택 대상에서 빼 둘 것**
+3. **과대해석 금지** — 선택된 변수가 특별히 "진짜"라는 뜻이 아님
+4. **상관된 변수들 중 하나만 뽑힐 수 있음** — 뽑히지 않은 쪽이 인과일 수도 있음
+5. **계수 해석에 주의** — 선택 후의 계수는 편향되어 있음 (선택편향)
+6. **연관과 인과를 구분할 것**
+
+::: {.callout-warning}
+- 4번과 5번이 GWAS에서 특히 중요함
+  - LD 블록 안에서 Lasso는 보통 **한 개만** 고름 → 그것이 인과 변이라는 보장은 없음
+  - 이 때문에 GWAS는 변수선택과 fine-mapping을 **따로** 함
+:::
+
+### 1.4 No Magic Bullet
+
+> "All models are wrong, but some are useful." — George Box
+
+- 변수선택은 아직 풀리지 않은 문제
+- 어떤 기준도 항상 옳지 않음 → 목적에 맞는 기준을 **고르는 것**이 분석자의 일
+
+### 1.5 표기
+
+- $S \subset \{1, \ldots, p\}$ — 선택된 변수들의 첨자 집합
+- $\hat{\boldsymbol\beta}(S)$ — $S$만 쓴 부분모형의 추정 계수
+- $\hat Y(S) = \mathbf{X}_S\hat{\boldsymbol\beta}(S)$ — 그 모형의 적합값
+- $|S|$ — 모형 크기
+
+## 2. Data Example I — 자료와 설계
+
+```{r}
+#| label: load
+G   <- as.matrix(read.csv(gzfile("data/gwas_geno_wide.csv.gz"),
+                          row.names = 1))
+tru <- read.csv("data/gwas_geno_truth.csv", row.names = 1)
+ph  <- read.csv("data/gwas_tc.csv")
+co  <- read.csv("data/gwas_cohort.csv")
+dim(G)
+head(tru[tru$is_causal == 1, ], 4)
+c(causal = sum(tru$is_causal), blocks = length(unique(tru$block)))
+```
+
+```{r}
+#| label: split
+keep <- co$fh_carrier == 0            # 3-III에서 제외한 FH 보인자
+G <- G[keep, ]; y <- ph$tc[keep]; co <- co[keep, ]
+set.seed(7)
+idx <- sample(nrow(G), 1000)
+Gtr <- G[idx, ];  Gte <- G[-idx, ]
+dtr <- co[idx, ]; dte <- co[-idx, ]
+ytr <- y[idx];    yte <- y[-idx]
+c(train = nrow(Gtr), test = nrow(Gte), p = ncol(G))
+```
+
+```{r}
+#| label: covariates
+## 공변량 효과를 먼저 걷어내고, 잔차를 유전 성분의 반응변수로 씀
+mc  <- lm(ytr ~ age + sex + bmi + PC1, data = dtr)
+rtr <- resid(mc)
+rte <- yte - as.numeric(predict(mc, newdata = dte))
+round(summary(mc)$r.squared, 4)
+```
+
+::: {.callout-tip}
+- 나이·성별·BMI·집단구조는 **교란/통제 변수** → 선택 대상이 아님 (주의사항 1·2)
+- 먼저 회귀해 잔차를 만들어 두면 이후 변수선택이 SNP에만 집중됨
+- 검정자료의 잔차는 **훈련자료에서 얻은 계수**로 계산해야 함
+:::
+
+```{r}
+#| label: ld-structure
+#| fig-cap: "블록 1 안의 LD (왼쪽)와 블록을 가로지른 LD (오른쪽)"
+#| fig-width: 8
+#| fig-height: 4
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+image(abs(cor(Gtr[, 1:16])), main = "블록 1 내부", axes = FALSE)
+image(abs(cor(Gtr[, seq(1, 300, by = 17)])), main = "블록 간",
+      axes = FALSE)
+par(op)
+```
+
+```{r}
+#| label: ols-fails
+## p > n 이면 최소제곱은 아예 풀리지 않음
+m_all <- lm(rtr ~ Gtr)
+c(estimable = sum(!is.na(coef(m_all))),
+  not_estimable = sum(is.na(coef(m_all))))
+```
+
+- 계수 2001개 중 1000개만 추정되고 나머지는 `NA` → **모형이 식별되지 않음**
+
+## 3. Prediction Risk Estimation
+
+### 3.1 편향-분산 절충
+
+$$R(S) = E\bigl[(\hat Y(S) - Y^{\text{new}})^2\bigr]
+= \underbrace{\text{Bias}^2}_{\text{변수 부족}}
++ \underbrace{\text{Variance}}_{\text{변수 과다}}
++ \underbrace{\sigma^2}_{\text{줄일 수 없음}}$$
+
+| 모형 크기 | 편향 | 분산 |
+|---|---|---|
+| 작음 | 큼 (중요한 변수 누락) | 작음 |
+| 큼 | 작음 | 큼 (추정할 게 많음) |
+
+- 예측위험 $R(S)$를 최소화하는 크기가 **어딘가 중간**에 있음
+
+```{r}
+#| label: bias-variance
+## 한계 유의성 순으로 SNP를 넣으며 훈련과 검정을 함께 봄
+pv  <- apply(Gtr, 2, function(g) {
+  s <- summary(lm(rtr ~ g))$coef
+  if (nrow(s) < 2) 1 else s[2, 4]
+})
+ord <- order(pv)
+
+sizes <- c(1, 3, 5, 12, 20, 30, 50, 80, 120, 200, 400, 700, 900, 990)
+tab <- t(sapply(sizes, function(k) {
+  s <- ord[1:k]
+  m <- lm(rtr ~ Gtr[, s])
+  b <- coef(m); b[is.na(b)] <- 0
+  ptr <- as.numeric(cbind(1, Gtr[, s]) %*% b)
+  pte <- as.numeric(cbind(1, Gte[, s]) %*% b)
+  c(k = k,
+    trainR2 = 1 - sum((rtr - ptr)^2) / sum((rtr - mean(rtr))^2),
+    testR2  = 1 - sum((rte - pte)^2) / sum((rte - mean(rte))^2))
+}))
+round(tab, 4)
+```
+
+```{r}
+#| label: bias-variance-plot
+#| fig-cap: "훈련은 계속 좋아지고 검정은 무너진다"
+plot(tab[, "k"], tab[, "trainR2"], type = "b", pch = 19, log = "x",
+     col = "#4c72b0", ylim = c(-0.5, 1), xlab = "모형 크기 |S|",
+     ylab = "R-squared")
+lines(tab[, "k"], tab[, "testR2"], type = "b", pch = 19,
+      col = "#c44e52")
+abline(h = 0, lty = 3)
+legend("bottomleft", bty = "n", pch = 19, col = c("#4c72b0", "#c44e52"),
+       legend = c("훈련자료", "검정자료"))
+```
+
+::: {.callout-important}
+- 훈련 $R^2$: 0.088 → **0.997** (단조증가)
+- 검정 $R^2$: $k = 50$ 근처에서 **0.227**로 정점 → $k = 990$에서 **−34.5**
+- $k = 990$ 모형은 훈련자료를 거의 완벽히 설명하지만 **새 사람에게는 평균보다도 못함**
+- 이것이 과적합
+:::
+
+### 3.2 훈련위험은 왜 낙관적인가
+
+$$\hat R_{\text{train}}(S)
+= \frac{1}{n}\sum_{i=1}^{n}\bigl(\hat Y_i(S) - Y_i\bigr)^2$$
+
+- 같은 자료로 계수를 **맞추고** 같은 자료로 **채점**함 → 편향이 아래쪽
+- 변수를 넣을수록 무조건 작아짐 → 이것만 보면 항상 가장 큰 모형을 고르게 됨
+- 해결: 복잡도 벌점을 더해 보정
+
+$$\hat R(S) = \hat R_{\text{train}}(S) + \text{Complexity Penalty}$$
+
+### 3.3 네 가지 기준
+
+| 기준 | 벌점 | 성격 |
+|---|---|---|
+| Mallow's $C_p$ | $\dfrac{2\lvert S\rvert\hat\sigma^2}{n}$ | $\hat\sigma^2$은 **완전모형**에서 |
+| AIC | $\dfrac{2\lvert S\rvert\hat\sigma^2}{n}$ | 가능도 기반, $C_p$와 같은 형태 |
+| BIC | $\dfrac{\lvert S\rvert\hat\sigma^2\log n}{n}$ | $\log n$ 때문에 **훨씬 보수적** |
+| LOOCV | — | 벌점 대신 직접 재계산 |
+
+- 정규 선형모형에서 $C_p$와 AIC는 사실상 같은 순위를 줌
+- $n = 1000$이면 $\log n = 6.9$ → BIC의 벌점이 AIC의 3.5배
+
+$$\text{LOOCV}: \quad
+\hat R_{CV}(S) = \frac{1}{n}\sum_{i=1}^{n}
+\bigl(Y_i - \hat Y_{(i)}(S)\bigr)^2
+= \frac{1}{n}\sum_{i=1}^{n}
+\left(\frac{\hat\varepsilon_i}{1 - h_{ii}}\right)^2$$
+
+::: {.callout-tip}
+## LOOCV를 n번 적합하지 않아도 되는 이유
+- 선형회귀에서는 hat matrix의 대각원소 $h_{ii}$만 있으면 **닫힌 식**으로 계산됨
+- Part 3-III에서 본 leverage가 여기서 다시 쓰임
+- 이 성질은 선형모형에만 있음 — GLM에서는 실제로 여러 번 적합해야 함
+:::
+
+```{r}
+#| label: criteria
+K <- 150
+full <- lm(rtr ~ Gtr[, ord[1:K]])
+s2   <- summary(full)$sigma^2
+n    <- length(rtr)
+
+crit <- t(sapply(1:K, function(k) {
+  s <- ord[1:k]
+  m <- lm(rtr ~ Gtr[, s])
+  sse <- sum(resid(m)^2)
+  h   <- hatvalues(m)
+  pte <- as.numeric(cbind(1, Gte[, s]) %*% coef(m))
+  c(k = k, Cp = sse / s2 - n + 2 * (k + 1),
+    AIC = AIC(m), BIC = BIC(m),
+    LOOCV = mean((resid(m) / (1 - h))^2),
+    testMSE = mean((rte - pte)^2))
+}))
+round(crit[c(1, 5, 11, 20, 40, 60, 88, 100, 150), ], 3)
+apply(crit[, -1], 2, which.min)
+```
+
+```{r}
+#| label: criteria-plot
+#| fig-cap: "기준별 최적 모형 크기 — 각 기준을 최솟값이 0이 되도록 맞춰 그림"
+sc <- apply(crit[, c("Cp", "BIC", "LOOCV", "testMSE")], 2,
+            function(v) (v - min(v)) / diff(range(v)))
+matplot(crit[, "k"], sc, type = "l", lwd = 2, lty = 1,
+        col = c("#4c72b0", "#dd8452", "#55a868", "#c44e52"),
+        xlab = "모형 크기 |S|", ylab = "기준값 (0~1로 척도조정)")
+legend("topright", bty = "n", lwd = 2, lty = 1,
+       col = c("#4c72b0", "#dd8452", "#55a868", "#c44e52"),
+       legend = c("Cp", "BIC", "LOOCV", "검정 MSE (정답)"))
+```
+
+::: {.callout-warning}
+## 기준들이 서로 다른 답을 준다
+
+| 기준 | 최적 $\lvert S\rvert$ |
+|---|---|
+| $C_p$ | 144 |
+| AIC | 150 (경계) |
+| **BIC** | **11** |
+| LOOCV | 144 |
+| 검정 MSE (정답) | 88 |
+
+- $C_p$·AIC·LOOCV는 끝까지 내려가고, BIC만 작은 모형을 고름
+- 왜 이렇게 빗나가는가
+  - 이 기준들은 **후보 모형이 미리 정해져 있다**고 가정함
+  - 그런데 우리는 후보 순서를 **같은 자료의 한계 p-value**로 정했음
+  - → 훈련오차가 부당하게 작아져 벌점이 이를 못 따라잡음
+- BIC가 살아남은 것은 벌점이 커서 **우연히** 보호받은 것
+- 교훈: 선택 절차 전체를 감싸는 **외부 검증**(5-III)이 필요함
+:::
+
+## 4. Model Search
+
+### 4.1 전수탐색
+
+- $p$개 변수의 부분집합은 $2^p$개
+
+```{r}
+#| label: subset-count
+c(p10 = 2^10, p20 = 2^20, p30 = 2^30)
+## p = 2000 이면 자릿수만
+round(2000 * log10(2))
+```
+
+- $2^{2000}$은 **602자리 수** → 전수탐색은 원리적으로 불가능
+- 분기한정(branch and bound, `leaps`)으로 $p \approx 30$까지는 실용적
+
+### 4.2 Stepwise
+
+| 방향 | 절차 |
+|---|---|
+| Forward | 빈 모형에서 시작 → 기준을 가장 좋게 하는 변수를 하나씩 추가 |
+| Backward | 완전모형에서 시작 → 가장 도움 안 되는 변수를 하나씩 제거 |
+| Both | 추가와 제거를 번갈아 |
+
+- 보는 모형 수가 $2^p$에서 $O(p^2)$로 줄어듦
+- **$p > n$이면 backward는 시작조차 못 함** (완전모형이 적합 불가)
+
+::: {.callout-warning}
+## Stepwise의 알려진 문제
+- 탐욕적(greedy) → 최적 부분집합을 놓칠 수 있음
+- 선택 후의 p-value·신뢰구간이 **타당하지 않음** (같은 자료를 두 번 씀)
+- 자료가 조금만 바뀌어도 선택 결과가 크게 달라짐 (불안정)
+- → 현대적 대안이 5-II의 벌점회귀
+:::
+
+## 5. Data Example II — 탐색해 보기
+
+### 5.1 후보 15개 전수탐색
+
+```{r}
+#| label: leaps
+library(leaps)
+s15 <- ord[1:15]
+D15 <- data.frame(rtr = rtr, Gtr[, s15])
+rs  <- regsubsets(rtr ~ ., data = D15, nvmax = 15)
+sm  <- summary(rs)
+round(data.frame(k = 1:15, adjR2 = sm$adjr2, Cp = sm$cp,
+                 BIC = sm$bic), 3)
+c(best_adjR2 = which.max(sm$adjr2), best_Cp = which.min(sm$cp),
+  best_BIC = which.min(sm$bic))
+```
+
+```{r}
+#| label: leaps-selected
+sel <- names(which(sm$which[which.min(sm$bic), ]))[-1]
+sel
+c(selected = length(sel), truly_causal = sum(tru[sel, "is_causal"]))
+```
+
+::: {.callout-important}
+- BIC가 고른 8개가 **전부 참 인과 SNP**
+- 후보를 15개로 좁혀 놓으면 전수탐색이 잘 작동함
+- 문제는 "15개로 좁히는 과정"에 이미 같은 자료를 썼다는 것 (§5.4)
+:::
+
+### 5.2 후보 200개 forward stepwise
+
+```{r}
+#| label: stepwise
+s200 <- ord[1:200]
+D200 <- data.frame(rtr = rtr, Gtr[, s200])
+fw <- step(lm(rtr ~ 1, data = D200),
+           scope = list(upper = lm(rtr ~ ., data = D200)),
+           direction = "forward", trace = 0,
+           k = log(nrow(D200)))          # k = log(n) 이면 BIC 기준
+v <- setdiff(names(coef(fw)), "(Intercept)")
+c(selected = length(v), truly_causal = sum(tru[v, "is_causal"]),
+  precision = sum(tru[v, "is_causal"]) / length(v),
+  recall = sum(tru[v, "is_causal"]) / sum(tru$is_causal))
+head(v, 12)
+```
+
+- 39개를 골라 그중 21개가 참 인과 — 정밀도 0.54, 재현율 0.53
+- 인과 SNP 40개 중 절반은 못 찾음 (효과가 작아 검정력이 부족)
+
+### 5.3 LD 블록 안에서 무엇이 뽑히는가
+
+```{r}
+#| label: ld-selection
+## snp_LDLR이 속한 블록(0)에서 무엇이 뽑혔나
+tru[c("snp_LDLR", "snp_LD1", "snp_LD2", "snp_AIM"),
+    c("block", "beta_true", "is_causal")]
+intersect(v, c("snp_LDLR", "snp_LD1", "snp_LD2", "snp_AIM"))
+round(cor(Gtr[, c("snp_LDLR", "snp_LD1", "snp_LD2")]), 3)
+```
+
+- 상관 0.85~0.95인 세 SNP 중 **하나만** 선택됨 (주의사항 4)
+- 여기서는 다행히 인과 변이가 뽑혔지만, 그럴 보장은 없음
+
+### 5.4 선택편향 — 반응변수를 섞어 보기
+
+- 위 절차들은 모두 "한계 p-value로 후보를 고른 뒤 그 안에서 모형을 만든" 것
+- 그 절차 자체가 얼마나 낙관적인지, **신호가 전혀 없는 자료**에 적용해 확인
+
+```{r}
+#| label: selection-bias
+s20 <- ord[1:20]
+c(observed_trainR2 = summary(lm(rtr ~ Gtr[, s20]))$r.squared,
+  truly_causal = sum(tru$is_causal[s20]))
+
+set.seed(11)
+perm <- replicate(20, {
+  yp <- sample(rtr)                      # 유전형과의 연결을 끊음
+  pp <- apply(Gtr, 2, function(g) {
+    s <- summary(lm(yp ~ g))$coef
+    if (nrow(s) < 2) 1 else s[2, 4]
+  })
+  summary(lm(yp ~ Gtr[, order(pp)[1:20]]))$r.squared
+})
+round(c(mean = mean(perm), min = min(perm), max = max(perm)), 4)
+```
+
+::: {.callout-important}
+## 같은 자료로 고르고 같은 자료로 평가하면
+
+| | 훈련 $R^2$ |
+|---|---|
+| 실제 자료 (상위 20개 SNP) | 0.329 |
+| **반응변수를 섞은 자료** | **평균 0.135** (0.118 ~ 0.161) |
+
+- 신호가 전혀 없는데도 $R^2$가 0.135 나옴 → 순전히 **선택 때문에 생긴 값**
+- 실제 0.329 중 상당 부분이 이 편향
+- 선택 절차를 거친 모형의 $R^2$, p-value, 신뢰구간은 **그대로 믿으면 안 됨**
+- 해결: 선택 과정을 포함한 전체를 **한 번도 안 본 자료**로 평가 (5-III)
+:::
+
+::: {.callout-note}
+## 다음 장으로
+- 이 장의 탐색 기반 방법은 $p = 2000$에서 이미 한계
+  - 전수탐색 불가, stepwise는 불안정, 기준들은 서로 다른 답
+- 5-II는 **변수를 고르는 대신 계수를 줄이는** 접근 — Ridge, Lasso, Elastic Net
+- Lasso는 계수 축소와 변수선택을 **동시에** 함
+:::

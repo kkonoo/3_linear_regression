@@ -1,0 +1,530 @@
+---
+title: "3-IV/V. Multiple Linear Regression: Case Studies"
+description: "집단층화와 가짜 연관, 범주형 유전형 모형, 다유전자 위험점수 예측"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="3-IV/V. 다중선형회귀 사례연구 — GWAS">
+        <meta name="ai-context" content="
+        이 챕터는 다중선형회귀의 전 과정을 GWAS 코호트(KNU-Lipid, n=1494)로 실습합니다.
+        첫째 사례는 집단층화(population stratification)입니다.
+        조상정보 마커 snp_AIM은 참 효과가 0인데도 공변량만 보정하면 p = 3.5e-15로 매우 유의하게 나옵니다.
+        집단에 따라 대립유전자 빈도가 다르고(0.12 vs 0.53) 집단에 따라 LDL 평균도 다르기 때문에 생기는
+        가짜 연관이며, 주성분 PC1~PC4를 넣으면 p = 0.99로 사라집니다.
+        반면 참으로 인과인 snp_LDLR은 보정 전후 모두 유의하게 남습니다.
+        이것이 marginal 효과와 conditional 효과의 차이이며, PC는 controlling factor입니다.
+        보정 후 잔차로 개인의 순위를 매기면 단일유전자 기전(FH) 보인자가 상위에 올라옵니다.
+        둘째, 범주형 설명변수를 다룹니다. as.factor()로 유전형 모형(AA/AB/BB)을 적합하고,
+        가법 모형과 부분 F-검정으로 비교합니다(F = 0.056, p = 0.81 -> 가법 모형으로 충분).
+        더미변수는 첫 수준이 baseline이 되며, 절편을 빼면 계수가 각 집단의 평균이 됩니다.
+        질적 변수끼리의 연관은 Pearson 카이제곱 검정으로 봅니다.
+        셋째, 다유전자 위험점수(PRS)를 만들어 예측합니다. 훈련자료에서 SNP별 효과를 추정해 가중합을 만들고,
+        검정자료에서 RMSE와 상관으로 정확도를 평가하며, 95% 예측구간의 실제 포함률을 확인합니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `3-IV,V. (Multiple) Case Study.docx` · 그림 26
+- 데이터: `data/gwas_cohort.csv`
+- 앞 장(3-III)에서 만든 `gwc`(FH 보인자 제외)를 이어서 씀
+:::
+
+```{r}
+#| label: setup
+#| include: false
+gw <- read.csv("data/gwas_cohort.csv")
+gw$pop <- factor(gw$pop)
+gwc <- subset(gw, fh_carrier == 0)
+```
+
+## 1. Case Study: 집단층화와 가짜 연관
+
+### 1.1 탐색적 분석
+
+```{r}
+#| label: load
+gw <- read.csv("data/gwas_cohort.csv")
+gw$pop <- factor(gw$pop)
+gwc <- subset(gw, fh_carrier == 0)       # 3-III에서 제외한 FH 보인자
+table(gwc$pop)
+```
+
+```{r}
+#| label: eda-maf
+## 집단별 대립유전자 빈도 (MAF)
+snps <- c("snp_LDLR", "snp_LD1", "snp_LD2", "snp_AIM",
+          paste0("snp_N", 1:6))
+maf <- sapply(snps, function(s) tapply(gwc[[s]], gwc$pop, mean) / 2)
+round(maf, 3)
+```
+
+```{r}
+#| label: eda-ldl
+## 집단별 형질 평균
+round(tapply(gwc$ldl, gwc$pop, mean), 3)
+```
+
+::: {.callout-important}
+## 가짜 연관이 만들어지는 두 조건
+- (a) **유전형이 집단에 따라 다름** — `snp_AIM`의 MAF가 0.121 vs 0.527
+- (b) **형질도 집단에 따라 다름** — LDL 평균 2.858 vs 3.385
+- → 두 조건이 함께 성립하면, 참 효과가 0이어도 `snp_AIM`과 LDL은 **연관되어 보임**
+- 이것이 집단층화 (population stratification)
+- `snp_LDLR`의 MAF는 0.266 vs 0.249로 거의 같음 → 이 경로로는 영향을 받지 않음
+:::
+
+```{r}
+#| label: eda-pc
+#| fig-cap: "주성분으로 본 집단 구조 — 조상정보 마커 200개의 PC1, PC2"
+plot(gwc$PC1, gwc$PC2, col = c("#4c72b0", "#dd8452")[gwc$pop],
+     pch = 20, cex = 0.5, xlab = "PC1", ylab = "PC2")
+legend("topright", legend = levels(gwc$pop), bty = "n",
+       col = c("#4c72b0", "#dd8452"), pch = 20)
+```
+
+```{r}
+#| label: pc1-pop
+## PC1이 집단 라벨을 얼마나 잘 대신하는가
+round(tapply(gwc$PC1, gwc$pop, mean), 3)
+summary(lm(PC1 ~ pop, data = gwc))$r.squared
+```
+
+- PC1 하나가 집단 라벨 변동의 96.4%를 설명
+- → 실제 GWAS에서는 집단 라벨을 모르므로 **PC를 대신 씀**
+
+### 1.2 회귀 분석 — marginal과 conditional
+
+```{r}
+#| label: aim-marginal
+## (a) marginal — SNP 하나만
+summary(lm(ldl ~ snp_AIM, data = gwc))$coef
+```
+
+```{r}
+#| label: aim-cov
+## (b) 임상 공변량만 보정
+summary(lm(ldl ~ snp_AIM + age + sex + bmi, data = gwc))$coef
+```
+
+```{r}
+#| label: aim-pc
+## (c) 주성분까지 보정
+m_aim <- lm(ldl ~ snp_AIM + age + sex + bmi + PC1 + PC2 + PC3 + PC4,
+            data = gwc)
+summary(m_aim)$coef
+```
+
+```{r}
+#| label: aim-pop
+## (d) 참고 — 집단 라벨을 직접 넣으면
+summary(lm(ldl ~ snp_AIM + age + sex + bmi + pop, data = gwc))$coef
+```
+
+::: {.callout-important}
+## 같은 SNP, 보정에 따라 뒤집히는 결론
+
+| 모형 | $\hat\beta_{AIM}$ | p-value |
+|---|---|---|
+| (a) marginal | 0.2136 | $1.8\times10^{-16}$ |
+| (b) + age, sex, bmi | 0.1906 | $3.5\times10^{-15}$ |
+| (c) + PC1~PC4 | **-0.0002** | **0.994** |
+| (d) + 집단 라벨 | -0.0067 | 0.807 |
+
+- 참값은 $\beta_{AIM} = 0$ — **(c)와 (d)만 정답**
+- 임상 공변량(나이·성별·BMI)을 아무리 넣어도 소용없음 → **교란변수가 집단 구조**이기 때문
+- 보정해야 할 변수는 "그럴듯한 변수"가 아니라 **교란 경로 위의 변수**
+:::
+
+```{r}
+#| label: ldlr-pc
+## 참으로 인과인 SNP는 보정해도 살아남는다
+co1 <- summary(lm(ldl ~ snp_LDLR + age + sex + bmi,
+                  data = gwc))$coef["snp_LDLR", ]
+co2 <- summary(lm(ldl ~ snp_LDLR + age + sex + bmi +
+                    PC1 + PC2 + PC3 + PC4,
+                  data = gwc))$coef["snp_LDLR", ]
+round(rbind(`PC 보정 전` = co1, `PC 보정 후` = co2), 5)
+```
+
+- 0.2526 → 0.2651 (참값 0.28), p-value는 오히려 더 작아짐
+- 교란을 걷어내면 **참 신호는 선명해지고 가짜 신호는 사라짐**
+
+### 1.3 전체 스캔 — SNP 순위가 어떻게 바뀌는가
+
+```{r}
+#| label: scan
+## SNP 10개를 하나씩 검정 (GWAS의 기본 형태)
+scan1 <- function(s, extra = "") {
+  f <- as.formula(paste("ldl ~", s, "+ age + sex + bmi", extra))
+  summary(lm(f, data = gwc))$coef[s, c(1, 4)]
+}
+before <- t(sapply(snps, scan1))
+after  <- t(sapply(snps, scan1, extra = "+ PC1 + PC2 + PC3 + PC4"))
+res <- data.frame(
+  beta_before = round(before[, 1], 4), p_before = before[, 2],
+  beta_after  = round(after[, 1], 4),  p_after  = after[, 2])
+res$rank_before <- rank(res$p_before)
+res$rank_after  <- rank(res$p_after)
+res[order(res$p_before), ]
+```
+
+::: {.callout-important}
+## Controlling factor를 반영한 순위
+- 보정 전 순위: `snp_LDLR` → `snp_LD1` → `snp_LD2` → **`snp_AIM`**
+- 보정 후 순위: `snp_AIM`이 4위에서 **꼴찌권으로 추락**
+- 귀무 SNP 6개는 보정 전후 모두 유의하지 않음 → 위양성이 아님
+- 이것이 원자료의 "controlling factor를 고려하여 더 나은 ranking 만들기"의 GWAS 판
+:::
+
+```{r}
+#| label: manhattan
+#| fig-cap: "보정 전후 p-value — GWAS의 Manhattan plot에 해당"
+#| fig-width: 8
+#| fig-height: 4
+op <- par(mfrow = c(1, 2), mar = c(7, 4, 2, 1))
+for (k in c("p_before", "p_after")) {
+  bp <- barplot(-log10(res[[k]]), names.arg = rownames(res),
+                las = 2, ylim = c(0, 26), ylab = "-log10(p)",
+                main = ifelse(k == "p_before", "PC 보정 전", "PC 보정 후"),
+                col = ifelse(rownames(res) == "snp_AIM",
+                             "#c44e52", "#4c72b0"))
+  abline(h = -log10(0.05 / 10), lty = 2)   # Bonferroni
+}
+par(op)
+```
+
+### 1.4 보정 후 잔차로 개인 순위 매기기
+
+- 원자료의 SAT 사례: 응시율을 보정한 **잔차**로 주(state)의 순위를 다시 매김
+- GWAS 판: 흔한 변이와 임상 요인으로 설명되는 부분을 걷어낸 뒤
+  **여전히 LDL이 설명되지 않는 사람**을 찾음 → 단일유전자 질환 후보
+
+```{r}
+#| label: rank-indiv
+## 이번에는 FH 보인자를 포함한 전체 코호트로 (보인자를 모른다고 가정)
+mfit <- lm(ldl ~ snp_LDLR + age + sex + bmi + PC1, data = gw)
+r <- rstandard(mfit)
+o <- order(r, decreasing = TRUE)[1:10]
+data.frame(iid = gw$iid[o], ldl = gw$ldl[o],
+           rstd = round(r[o], 2), fh = gw$fh_carrier[o],
+           row.names = NULL)
+```
+
+```{r}
+#| label: rank-raw
+## 비교 — 보정 없이 LDL 원값으로만 줄 세우면
+o2 <- order(gw$ldl, decreasing = TRUE)[1:10]
+data.frame(iid = gw$iid[o2], ldl = gw$ldl[o2],
+           fh = gw$fh_carrier[o2], row.names = NULL)
+```
+
+::: {.callout-tip}
+- 이 자료에서는 FH 보인자의 효과가 워낙 커서 두 순위 모두 6명을 잡아냄
+- 그러나 **간격**이 다름
+  - 보정 후: 6위 표준화잔차 5.35 → 7위 3.13 (뚝 떨어짐)
+  - 보정 전: 6위 7.09 → 7위 5.65 (완만)
+- 보정은 "누가 상위인가"보다 **"어디서 끊을 것인가"를 분명하게** 해 줌
+:::
+
+### 1.5 모형 적합 평가
+
+```{r}
+#| label: fit-assess
+#| fig-cap: "PC 보정 모형의 진단 플롯"
+#| fig-width: 9
+#| fig-height: 3.5
+m_final <- lm(ldl ~ snp_LDLR + age + sex + bmi +
+                PC1 + PC2 + PC3 + PC4, data = gwc)
+op <- par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+plot(fitted(m_final), residuals(m_final), pch = 20, cex = 0.4,
+     xlab = "Fitted", ylab = "Residuals", main = "등분산")
+abline(h = 0, col = "red")
+qqnorm(residuals(m_final), pch = 20, cex = 0.4, main = "정규성")
+qqline(residuals(m_final), col = "red")
+plot(cooks.distance(m_final), type = "h", col = "red",
+     ylab = "Cook's distance", xlab = "Observation",
+     main = "영향점")
+par(op)
+```
+
+```{r}
+#| label: fit-summary
+summary(m_final)$coef
+c(sigma = summary(m_final)$sigma,
+  R2 = summary(m_final)$r.squared,
+  adjR2 = summary(m_final)$adj.r.squared)
+```
+
+- FH를 제외한 뒤라 이상치 문제 없음, Cook's distance도 모두 작음
+- PC2~PC4는 유의하지 않지만 **빼지 않음** — controlling factor는 유의성으로 고르지 않음
+
+## 2. 범주형 설명변수 다루기
+
+### 2.1 가법 모형과 유전형 모형
+
+| 모형 | 코딩 | 자유도 | 가정 |
+|---|---|---|---|
+| 가법 (additive) | 0, 1, 2를 **수치**로 | 1 | 대립유전자 효과가 일정 |
+| 유전형 (genotypic) | AA/AB/BB를 **범주**로 | 2 | 가정 없음 |
+
+- 가법 모형이 곧 단순회귀, 유전형 모형이 곧 ANOVA (Part 2)
+- 유전형 모형은 우성·열성·초우성까지 포괄 → 더 유연하지만 자유도를 하나 더 씀
+
+```{r}
+#| label: factor-fit
+gwc$geno <- factor(gwc$snp_LDLR, levels = 0:2,
+                   labels = c("AA", "AB", "BB"))
+table(gwc$geno)
+
+m_geno <- lm(ldl ~ geno + age + sex + bmi + PC1, data = gwc)
+summary(m_geno)$coef
+```
+
+```{r}
+#| label: additive-fit
+m_add <- lm(ldl ~ snp_LDLR + age + sex + bmi + PC1, data = gwc)
+summary(m_add)$coef["snp_LDLR", ]
+```
+
+::: {.callout-important}
+## 가법성 검정
+- 유전형 모형: AB = 0.2600, BB = 0.5389
+- 가법 모형이 맞다면 BB $\approx$ 2 $\times$ AB = 0.5200 이어야 함 → 실제로 거의 그러함
+- 두 모형은 **내포관계** → 부분 F-검정으로 비교 가능 (자유도 차이 1)
+:::
+
+```{r}
+#| label: additivity-test
+anova(m_add, m_geno)
+```
+
+- $F = 0.056$, p-value $= 0.81$ → 가법 모형에서 벗어난다는 증거 없음
+- → 자유도가 적은 **가법 모형을 씀** (GWAS의 표준)
+
+### 2.2 더미변수를 직접 만들어 보기
+
+```{r}
+#| label: dummy-by-hand
+d_AB <- as.integer(gwc$geno == "AB")
+d_BB <- as.integer(gwc$geno == "BB")
+summary(lm(ldl ~ d_AB + d_BB + age + sex + bmi + PC1,
+           data = gwc))$coef[1:3, ]
+```
+
+- `factor`를 쓴 결과와 완전히 동일 → R이 내부에서 하는 일이 이것
+
+::: {.callout-warning}
+## 절편을 빼면 해석이 달라진다
+- R은 factor의 **첫 수준을 baseline**으로 삼음 (여기서는 AA)
+  - 계수 = "baseline 대비 차이"
+- 절편을 빼면 (`~ geno - 1`) 계수 = **각 집단의 평균 그 자체**
+  - 전부 유의하게 나오지만, 이는 "평균이 0이 아니다"라는 뜻일 뿐
+  - 집단 간 차이에 대한 검정이 아님
+:::
+
+```{r}
+#| label: no-intercept
+summary(lm(ldl ~ geno, data = gwc))$coef        # baseline = AA
+summary(lm(ldl ~ geno - 1, data = gwc))$coef    # 각 집단 평균
+round(tapply(gwc$ldl, gwc$geno, mean), 4)
+```
+
+- `geno - 1`의 계수 2.9381 / 3.1784 / 3.5081 = 집단 평균과 정확히 일치
+- 수준이 3개면 더미는 2개로 충분 — 3개를 다 넣으면 절편과 완전공선
+
+### 2.3 질적 변수끼리의 연관 — Pearson 카이제곱
+
+- 연속형 $X$끼리는 상관계수·VIF로 봤음
+- **범주형 $X$끼리**는 분할표와 카이제곱 검정으로 봄
+
+$$\chi^2 = \sum_{i,j}\frac{(O_{ij} - E_{ij})^2}{E_{ij}}, \qquad
+E_{ij} = \frac{(\text{행 합})(\text{열 합})}{n}$$
+
+```{r}
+#| label: chisq-aim
+tb <- table(gwc$snp_AIM, gwc$pop)
+tb
+chisq.test(tb)
+```
+
+```{r}
+#| label: chisq-ldlr
+tb2 <- table(gwc$snp_LDLR, gwc$pop)
+tb2
+chisq.test(tb2)
+```
+
+| SNP | $\chi^2$ | p-value | 해석 |
+|---|---|---|---|
+| `snp_AIM` | 477.7 | $< 2\times10^{-16}$ | 집단과 강하게 연관 → 조상정보 마커 |
+| `snp_LDLR` | 3.76 | 0.153 | 집단과 무관 → 층화의 영향 없음 |
+
+- §1.2에서 `snp_AIM`만 보정에 민감했던 이유가 이 표에 그대로 나타남
+
+### 2.4 Marginal vs. conditional 다시 보기
+
+| | 무엇을 보는가 | 이 자료에서 |
+|---|---|---|
+| Marginal | 그 변수 **하나만** 넣었을 때의 효과 | `snp_AIM` 0.2136, 유의 |
+| Conditional | 나머지가 **이미 들어 있을 때**의 추가 효과 | `snp_AIM` -0.0002, 비유의 |
+
+- 범주형 $X$의 전체 효과는 `anova(model)`, 연속형 $X$는 `summary(model)`로 봄
+- 두 값이 크게 다르면 → 교란 또는 다중공선성을 의심
+
+## 3. Case Study: 다유전자 위험점수(PRS)로 예측
+
+- 앞 절까지는 **설명**(어느 변이가 형질과 연관되는가)이 목적이었음
+- 여기서는 **예측**이 목적 — 새 사람의 LDL을 얼마나 맞힐 수 있는가
+
+### 3.1 훈련자료와 검정자료 분할
+
+```{r}
+#| label: split
+set.seed(1)
+idx <- sample(nrow(gwc), 1000)
+tr <- gwc[idx, ]                          # 훈련
+te <- gwc[-idx, ]                         # 검정
+c(train = nrow(tr), test = nrow(te))
+```
+
+::: {.callout-warning}
+- 가중치 추정과 성능 평가를 **같은 자료로 하면 안 됨**
+- 같은 자료로 하면 성능이 낙관적으로 부풀려짐 (§3.3에서 수치로 확인)
+:::
+
+### 3.2 PRS 만들기
+
+$$PRS_i = \sum_{j \in S} \hat\beta_j\, g_{ij}$$
+
+- $g_{ij}$ = 개인 $i$의 SNP $j$ 유전형 (0/1/2)
+- $\hat\beta_j$ = **훈련자료에서** SNP를 하나씩 넣어 얻은 계수
+- $S$ = 선택된 SNP 집합 (여기서는 $p < 0.05$)
+
+```{r}
+#| label: prs-weights
+w <- sapply(snps, function(s) {
+  f <- as.formula(paste("ldl ~", s, "+ age + sex + bmi + PC1"))
+  summary(lm(f, data = tr))$coef[s, c(1, 4)]
+})
+round(t(w), 4)
+
+keep <- snps[w[2, ] < 0.05]
+keep
+```
+
+```{r}
+#| label: prs-build
+prs <- function(d) {
+  as.numeric(as.matrix(d[, keep, drop = FALSE]) %*% w[1, keep])
+}
+tr$prs <- prs(tr)
+te$prs <- prs(te)
+summary(te$prs)
+```
+
+### 3.3 예측과 예측 정확도
+
+```{r}
+#| label: prs-model
+m_cov <- lm(ldl ~ age + sex + bmi + PC1, data = tr)
+m_prs <- lm(ldl ~ prs + age + sex + bmi + PC1, data = tr)
+summary(m_prs)$coef
+```
+
+```{r}
+#| label: prs-accuracy
+acc <- function(m) {
+  p <- predict(m, te)
+  c(RMSE = sqrt(mean((te$ldl - p)^2)),
+    cor  = cor(te$ldl, p),
+    R2   = 1 - sum((te$ldl - p)^2) / sum((te$ldl - mean(te$ldl))^2))
+}
+round(rbind(`공변량만` = acc(m_cov), `공변량 + PRS` = acc(m_prs)), 4)
+```
+
+| | 훈련 $R^2$ | 검정 $R^2$ |
+|---|---|---|
+| 공변량만 | 0.2599 | 0.2237 |
+| 공변량 + PRS | 0.3173 | 0.2585 |
+
+- PRS를 넣으면 검정 $R^2$가 0.224 → 0.259로 올라감
+- 훈련 $R^2$가 검정 $R^2$보다 늘 큼 → **낙관적 편향**
+- 이 간극이 Part 5(변수선택)에서 다룰 예측위험(prediction risk)의 핵심
+
+```{r}
+#| label: prs-optimism
+c(train_R2 = summary(m_prs)$r.squared, test_R2 = acc(m_prs)["R2"])
+```
+
+```{r}
+#| label: prs-plot
+#| fig-cap: "검정자료에서의 관측값 vs 예측값"
+p <- predict(m_prs, te)
+plot(p, te$ldl, pch = 20, cex = 0.5, col = "#4c72b0",
+     xlab = "Predicted LDL", ylab = "Observed LDL")
+abline(0, 1, col = "red", lwd = 2)
+```
+
+### 3.4 LD pruning이 필요한 이유
+
+```{r}
+#| label: prs-pruned
+## 선택된 SNP 3개는 사실상 같은 신호 (3-III의 LD 블록)
+round(cor(tr[, keep]), 3)
+
+## 대표 SNP 하나만으로 만든 PRS와 비교
+tr$prs1 <- w[1, "snp_LDLR"] * tr$snp_LDLR
+te$prs1 <- w[1, "snp_LDLR"] * te$snp_LDLR
+m_prs1 <- lm(ldl ~ prs1 + age + sex + bmi + PC1, data = tr)
+
+acc1 <- function(m, v) {
+  p <- predict(m, te)
+  c(RMSE = sqrt(mean((te$ldl - p)^2)), cor = cor(te$ldl, p))
+}
+round(rbind(`SNP 3개` = acc1(m_prs), `대표 SNP 1개` = acc1(m_prs1)), 4)
+```
+
+::: {.callout-important}
+- LD로 묶인 SNP를 다 넣어도 대표 하나만 넣은 것과 거의 같음
+- 오히려 같은 신호를 세 번 세어 **가중치가 과대평가됨**
+- → 실제 PRS는 LD clumping으로 대표 SNP만 남긴 뒤 만듦
+- 3-III의 다중공선성이 예측 문제에서 다시 나타난 것
+:::
+
+### 3.5 예측구간이 실제로 맞는가
+
+- 이론: 95% 예측구간은 새 관측치의 95%를 포함해야 함
+- 검정자료로 직접 확인할 수 있음
+
+```{r}
+#| label: pi-coverage
+pi <- predict(m_prs, te, interval = "prediction")
+c(coverage = mean(te$ldl >= pi[, "lwr"] & te$ldl <= pi[, "upr"]),
+  mean_width = mean(pi[, "upr"] - pi[, "lwr"]))
+
+ci <- predict(m_prs, te, interval = "confidence")
+c(CI_width = mean(ci[, "upr"] - ci[, "lwr"]),
+  PI_width = mean(pi[, "upr"] - pi[, "lwr"]))
+```
+
+- 실제 포함률 94.9% — 이론값 95%와 일치 → 모형 가정이 타당했음
+- 예측구간이 신뢰구간보다 훨씬 넓음 (3-II §4.3의 $\sigma^2$ 항)
+
+::: {.callout-note}
+## Part 3 정리
+| 문제 | 증상 | 도구 | 이 자료의 사례 |
+|---|---|---|---|
+| 영향점 | 소수 관측치가 계수를 지배 | Cook's distance | FH 보인자 6명 |
+| 다중공선성 | F는 유의, t는 비유의 | VIF | LD 블록 |
+| 교란 | marginal과 conditional이 뒤집힘 | 부분 F, 보정 | 집단층화 |
+| 과적합 | 훈련 성능 > 검정 성능 | 훈련/검정 분할 | PRS |
+
+- 뒤의 세 Part가 각각 이어받음
+  - Part 4 — 형질이 이분형일 때 (`disease`)
+  - Part 5 — 설명변수가 매우 많을 때 (변수선택, Ridge/Lasso)
+  - Part 6 — 독립성 가정이 깨질 때 (혈연관계 보정 혼합모형)
+:::

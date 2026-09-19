@@ -1,0 +1,111 @@
+---
+title: "3. Linear Regression"
+subtitle: "회귀분석 — 추정, 추론, 진단, 그리고 모형 선택 · 생물학 자료로 배우기"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="홈 - 회귀분석 강의 안내">
+        <meta name="ai-context" content="
+        이 강의는 회귀분석(regression analysis) 전 과정을 생물학·유전체 자료로 다룹니다.
+        Part 1 단순선형회귀(최소제곱 추정, 오차 가정, 신뢰구간과 예측구간, 잔차 진단) — GWAS 단일 SNP 검정, 부모-자녀 회귀, 중성지방 로그변환,
+        Part 2 분산분석(ANOVA, F-검정, Tukey 다중비교, 회귀와의 관계) — 유전형별 LDL, APOE별 중성지방,
+        Part 3 다중선형회귀(설계행렬, hat matrix, 부분 F-검정, 진단, 다중공선성과 VIF, 집단층화) — 가상 GWAS 코호트 KNU-Lipid,
+        Part 4 일반화선형모형(로지스틱 회귀와 odds ratio, 포아송 회귀와 과산포) — METABRIC 유방암, 케이스-컨트롤 GWAS, RNA-seq 카운트,
+        Part 5 변수선택(Mallows Cp, AIC, BIC, stepwise, Ridge, Lasso, Elastic Net) — 고차원 GWAS와 다유전자 위험점수(lassosum),
+        Part 6 기타 회귀모형(가중최소제곱, 로버스트 회귀, 비선형 회귀, GAM, 시계열, 공간, 혼합효과) — 메틸화, eQTL, NMR, 연속혈당, Visium, 가계 코호트 LMM.
+        부록은 통계량 치트시트와 R 함수 레퍼런스입니다.
+        METABRIC을 뺀 모든 자료는 참값을 아는 시뮬레이션이라 각 방법의 추정치를 참값과 비교해 채점할 수 있습니다.
+        모든 실습은 R로 하며 base R과 MASS, boot, glmnet, leaps, mgcv, nlme, quantreg 패키지를 씁니다.
+        ">
+---
+
+## Course Overview
+
+- 회귀분석 = **하나의 반응변수($Y$)를 여러 설명변수($X$)로 설명하고 예측하는** 통계 방법
+- 단순선형회귀에서 출발 → 분산분석 → 다중회귀 → 일반화선형모형 → 변수선택 → 가정이 깨질 때의 확장
+- 매 장에서 **이론(수식) + R 실습**을 함께, 가능한 곳마다 R 함수 결과를 **공식으로 한 번 더 직접 계산**해 확인
+- 원자료(회귀분석 강의 노트)의 이론·수식·절 구성은 그대로, **예제만 생물학 자료로 교체**
+
+::: {.callout-tip}
+## 이 강의의 세 가지 목적
+1. **Prediction** — 새로운 X로 Y를 예측하기
+2. **Modeling** — X와 Y의 관계를 정량화하기
+3. **Testing** — 연관성이 통계적으로 유의한지 검정하기
+
+> *"All models are wrong, but some are useful."* — George Box
+> *"Embrace your data, not your models."* — John Tukey
+:::
+
+## 왜 생물학 자료인가
+
+- 대부분의 자료가 **참값을 아는 시뮬레이션** → "추정이 맞았는가"를 직접 채점
+  - 예: SNP 효과 참값 0.28, 추정치 0.336 → 왜 틀렸는지 추적하면 영향점(FH 보인자)을 만남
+- 회귀의 함정을 **생물학적 기전**으로 심어 둠
+
+| 함정 | 생물학적 장치 | 드러나는 곳 |
+|---|---|---|
+| 영향점 | 가족성 고콜레스테롤혈증(FH) 보인자 | [1-II](chapters/02_slr_prediction.qmd), [3-III](chapters/08_mlr_diagnostics.qmd) |
+| 다중공선성 | 연관불평형(LD) | [3-III](chapters/08_mlr_diagnostics.qmd) |
+| 교란·가짜 연관 | 집단층화 | [3-IV/V](chapters/09_mlr_casestudy.qmd) |
+| 과산포 | RNA-seq 생물학적 변동 | [4-V](chapters/14_poisson_inference.qmd) |
+| $p \gg n$·과적합 | 고차원 유전형 | [5-I](chapters/15_varsel_basics.qmd) |
+| 상관된 오차 | 혈연, 시간(혈당), 공간(조직 절편) | [6-II](chapters/19_other_models_2.qmd) |
+
+- 실제 자료도 하나: **METABRIC** 유방암 코호트 (Part 4 로지스틱)
+
+## Syllabus
+
+| Part | 장 | 주제 | 실습 자료 |
+|---|---|---|---|
+| **0** | [R 환경과 데이터](chapters/00_setup.qmd) | 설치, 패키지, 자료 18종 | — |
+| **1** Simple Linear Regression | [1-I](chapters/01_slr_estimation.qmd) | 추정과 추론 | GWAS 단일 SNP 검정 |
+| | [1-II](chapters/02_slr_prediction.qmd) | 예측과 모형평가 | 유전형으로 LDL 예측, 이상치 |
+| | [1-III](chapters/03_slr_examples.qmd) | 데이터 예제 | 부모–자녀 회귀, 중성지방 |
+| **2** ANOVA | [2-I](chapters/04_anova_basics.qmd) | 기본 개념과 F-검정 | 유전형별 LDL |
+| | [2-II](chapters/05_anova_comparison.qmd) | 다중비교와 모형적합 | Tukey, APOE별 중성지방 |
+| **3** Multiple Linear Regression | [3-I](chapters/06_mlr_estimation.qmd) | 추정 | 유전형 + 공변량 |
+| | [3-II](chapters/07_mlr_inference.qmd) | 추론과 예측 | 부분 F, 개인 LDL 예측 |
+| | [3-III](chapters/08_mlr_diagnostics.qmd) | 진단과 다중공선성 | FH 영향점, LD 블록 |
+| | [3-IV/V](chapters/09_mlr_casestudy.qmd) | 사례연구 | 집단층화, 유전형 모형, PRS |
+| **4** Generalized Linear Models | [4-I](chapters/10_logistic_basics.qmd) | 로지스틱: 개념과 추정 | METABRIC 5년 사망 |
+| | [4-II](chapters/11_logistic_inference.qmd) | 로지스틱: 추론·적합도·분류 | METABRIC |
+| | [4-III](chapters/12_logistic_casestudy.qmd) | 로지스틱: 사례연구 | 케이스–컨트롤 GWAS |
+| | [4-IV](chapters/13_poisson_basics.qmd) | 포아송: 개념과 추정 | RNA-seq 카운트 |
+| | [4-V](chapters/14_poisson_inference.qmd) | 포아송: 추론과 과산포 | 음이항, 500유전자 스캔 |
+| **5** Variable Selection | [5-I](chapters/15_varsel_basics.qmd) | 변수선택 기초 | SNP 2000개 |
+| | [5-II](chapters/16_regularized.qmd) | 정규화 회귀 | Ridge, Lasso, Elastic Net |
+| | [5-III](chapters/17_varsel_casestudy.qmd) | 사례연구 | 다유전자 위험점수, lassosum |
+| **6** Other Regression Models | [6-I](chapters/18_other_models_1.qmd) | WLS·로버스트·비선형·GAM | 메틸화, eQTL, NMR |
+| | [6-II](chapters/19_other_models_2.qmd) | 시계열·공간·혼합효과 | 연속혈당, Visium, 가계 LMM |
+| **부록** | [A](chapters/A1_cheatsheet.qmd) | 통계량 치트시트 | — |
+| | [B](chapters/A2_r_reference.qmd) | R 함수 레퍼런스 | — |
+
+## 이 사이트 읽는 법
+
+| 상자 | 뜻 |
+|---|---|
+| 파란 **note** | 원자료 출처, 부연 설명 |
+| 빨간 **important** | 핵심 개념, **실습 자료 소개와 참값** |
+| 노란 **warning** | 함정, 흔한 실수 |
+| 초록 **tip** | 직관, 실무 도구 |
+
+- 설명은 개조식 — 한 줄에 한 정보
+- R 코드는 복사해서 그대로 실행 가능 (저장소 폴더를 작업 디렉터리로 → [0장](chapters/00_setup.qmd))
+- 오른쪽 아래 **AI 학습 도우미**에 지금 보고 있는 장의 내용을 물어볼 수 있음
+
+## 선수 지식
+
+- 기초 통계 (분포, 기댓값과 분산, 신뢰구간, 가설검정) — 복습은 [부록 A](chapters/A1_cheatsheet.qmd)
+- 선형대수 기초 (벡터, 행렬, 행렬곱) — [2. Linear Algebra](https://kkonoo.github.io/2_linear_algebra/)
+- R 기본 문법 — 복습은 [부록 B](chapters/A2_r_reference.qmd)
+
+## 평가
+
+| 항목 | 비중 |
+|------|------|
+| 과제 | TBD |
+| 중간 | TBD |
+| 기말 | TBD |

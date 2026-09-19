@@ -1,0 +1,238 @@
+---
+title: "R 환경과 데이터"
+description: "R·RStudio 설치, 강의 자료 받기, 패키지, 실습 데이터 18종, 표기법"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="0. R 환경과 데이터">
+        <meta name="ai-context" content="
+        이 챕터는 회귀분석 실습을 위한 R 환경과 실습 자료를 안내합니다.
+        R 4.3 이상과 RStudio(또는 Positron, VS Code)를 쓰며, 강의 저장소를 내려받아 저장소 폴더를 작업 디렉터리로 두고
+        data/ 아래 파일을 상대경로로 읽습니다.
+        필요한 패키지: MASS(음이항·ridge·Huber), boot(교차검증), glmnet(lasso, elastic net), leaps(부분집합 선택),
+        mgcv(GAM), nlme(GLS·혼합효과), quantreg(중앙값 회귀). 나머지는 base R입니다.
+        실습 자료는 18개 파일이며 METABRIC만 실제 자료이고 나머지는 참값을 아는 시뮬레이션입니다.
+        주 자료는 가상 GWAS 코호트 KNU-Lipid(1500명)이며, 가계 코호트 KNU-Family, RNA-seq 카운트 KNU-RNA,
+        고차원 유전형(2000 SNP), 메틸화, eQTL, NMR, 연속혈당(CGM), Visium 공간전사체가 있습니다.
+        시뮬레이션은 data-raw/ 의 스크립트가 고정 시드로 만들며, 다시 실행하면 같은 파일이 나옵니다.
+        표기: Y는 반응변수, x는 설명변수, beta는 모수, beta-hat은 추정량, epsilon은 오차, epsilon-hat(잔차)은 오차의 추정량입니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `0_Getting_Started/` — 강의 소개, `resource_R_intro.pdf`, `resource_R_reference_card.pdf`
+- R 문법 기초와 함수 정리는 [부록 B](A2_r_reference.qmd)로 옮김
+:::
+
+## 1. R & RStudio
+
+### 설치
+
+| 프로그램 | 버전 | 받는 곳 |
+|---|---|---|
+| **R** | 4.3 이상 | CRAN (`cran.r-project.org`) |
+| **RStudio Desktop** | 최신 | Posit (`posit.co`) — Positron, VS Code도 가능 |
+| Quarto (선택) | 1.4 이상 | `quarto.org` — 이 사이트를 직접 빌드할 때만 |
+
+- 강의 사이트는 GitHub Actions에서 R 4.3으로 빌드됨 → 그 이상이면 같은 결과
+- 윈도우에서 한글 경로(예: `D:\자료`)는 가끔 문제를 일으킴 → 영문 경로 권장
+
+### RStudio 화면 구성
+
+| 창 | 하는 일 |
+|---|---|
+| Source (왼쪽 위) | 스크립트(`.R`)·문서(`.qmd`) 편집 — 코드를 저장해 두는 곳 |
+| Console (왼쪽 아래) | 코드 실행과 결과 |
+| Environment / History (오른쪽 위) | 만든 객체, 실행 기록 |
+| Files / Plots / Packages / Help (오른쪽 아래) | 파일 탐색, 그림, 패키지, 도움말 |
+
+- `Ctrl + Enter` — 현재 줄(또는 선택 영역) 실행
+- 콘솔에 바로 치기보다 **스크립트에 쓰고 실행** → 나중에 재현 가능
+
+### 강의 자료 받기
+
+- 저장소: `github.com/kkonoo/3_linear_regression` (사이트 오른쪽 위 GitHub 아이콘)
+  - `git clone` 하거나 **Code → Download ZIP**
+- 폴더 구조
+
+```
+3_linear_regression/
+├── chapters/     각 장의 .qmd (이 사이트의 원본)
+├── data/         실습 데이터 18개
+├── data-raw/     시뮬레이션 자료를 만드는 스크립트
+└── _quarto.yml   사이트 설정
+```
+
+- **작업 디렉터리 = 저장소 폴더** 로 두고 `read.csv("data/...")`처럼 상대경로로 읽음
+  - RStudio: *File → New Project → Existing Directory* 로 저장소 폴더를 프로젝트로 열면 자동
+  - 또는 `setwd("저장소 경로")`
+
+## 2. 패키지 설치
+
+### 이 강의에서 쓰는 패키지
+
+| 패키지 | 용도 | 주요 함수 | 장 |
+|---|---|---|---|
+| base / stats | 회귀·GLM·검정·그래픽 전부 | `lm`, `glm`, `anova`, `predict`, `nls`, `optim` | 전체 |
+| `MASS` | 음이항, Ridge, Huber | `glm.nb`, `lm.ridge`, `rlm` | 4-V, 5-II, 6-I |
+| `boot` | 교차검증 | `cv.glm` | 4-II |
+| `glmnet` | Lasso, Ridge, Elastic Net | `glmnet`, `cv.glmnet` | 5-II, 5-III |
+| `leaps` | 최량 부분집합 선택 | `regsubsets` | 5-I |
+| `mgcv` | 일반화가법모형 | `gam`, `s()` | 4-V, 6-I, 6-II |
+| `nlme` | 상관된 오차, 혼합효과 | `gls`, `lme` | 6-II |
+| `quantreg` | 중앙값(분위수) 회귀 | `rq` | 6-I |
+
+- `MASS`, `boot`, `mgcv`, `nlme`는 R에 기본으로 딸려 오는 권장(recommended) 패키지
+- 그래픽은 모두 base R — `ggplot2`, `tidyverse` 없이 진행
+
+### 설치 스크립트
+
+```{r}
+#| label: install
+#| eval: false
+pkgs <- c("MASS", "boot", "glmnet", "leaps", "mgcv", "nlme", "quantreg")
+install.packages(setdiff(pkgs, rownames(installed.packages())))
+```
+
+```{r}
+#| label: check-packages
+## 설치 확인 — 버전이 나오면 준비 완료
+pkgs <- c("MASS", "boot", "glmnet", "leaps", "mgcv", "nlme", "quantreg")
+sapply(pkgs, function(p) as.character(packageVersion(p)))
+R.version.string
+```
+
+## 3. 실습 데이터
+
+### 데이터 목록
+
+| 파일 | 내용 | 크기 | 종류 | 쓰이는 곳 |
+|---|---|---|---|---|
+| `gwas_cohort.csv` | **KNU-Lipid** 코호트 1500명 × 22열 (LDL, 유전형, 공변량, PC) | 124 KB | 가상 | Part 1~5 |
+| `gwas_cohort_ext.csv` | 같은 1500명의 APOE 유전형, 중성지방 | 30 KB | 가상 | 1-III, 2-II |
+| `gwas_aim_markers.csv` | 조상정보 마커 200개 (PC 재현용) | 612 KB | 가상 | 참고용 |
+| `family_cohort.csv` | **KNU-Family** 300가계 × 5명 | 68 KB | 가상 | 1-III, 6-II |
+| `family_geno.csv.gz` | 가계 코호트의 귀무 SNP 1000개 | 402 KB | 가상 | 6-II |
+| `metabric.csv` | **METABRIC** 유방암 1904명 × 32열 | 509 KB | **실제** | 4-I, 4-II |
+| `rnaseq_counts.csv` | **KNU-RNA** 카운트 500유전자 × 24시료 | 49 KB | 가상 | 4-IV, 4-V, 6-I |
+| `rnaseq_samples.csv` | 시료 정보 (군, 배치, 나이, 라이브러리 크기) | 1 KB | 가상 | 같음 |
+| `rnaseq_truth.csv` | 유전자별 참값 (log2FC, 과산포) | 16 KB | 가상 | 같음 |
+| `gwas_geno_wide.csv.gz` | 고차원 유전형 1500 × 2000 SNP | 737 KB | 가상 | Part 5 |
+| `gwas_tc.csv` | 다유전자 형질 총콜레스테롤 | 18 KB | 가상 | Part 5 |
+| `gwas_geno_truth.csv` | SNP별 참값 (블록, MAF, 효과, 인과 여부) | 42 KB | 가상 | Part 5 |
+| `methyl_cpg.csv` | **KNU-Methyl** 400명, CpG 2개 (메틸화 read / coverage) | 11 KB | 가상 | 6-I |
+| `eqtl_ldlr.csv` | LDLR 발현 eQTL 400명 | 9 KB | 가상 | 6-I |
+| `nmr_spectrum.csv` | 1H-NMR 스펙트럼 401점 | 5 KB | 가상 | 6-I |
+| `cgm_glucose.csv` | 연속혈당 14일 × 15분 = 1344점 | 56 KB | 가상 | 6-II |
+| `visium_spots.csv` | Visium 유사 공간전사체 600 spot × 50 유전자 | 196 KB | 가상 | 6-II |
+| `visium_truth.csv` | 유전자별 참값 (공간변이 여부, 범위) | 1 KB | 가상 | 6-II |
+
+- **가상 자료는 참값을 알고 있음** → 각 장에서 "추정치 vs 참값"으로 방법을 채점
+  - 참값은 각 장 맨 위의 자료 소개 상자(빨간 상자)에 있음
+- METABRIC은 공개된 실제 유방암 코호트 (Curtis et al., *Nature* 2012)
+
+### 불러오기
+
+```{r}
+#| label: load-all
+## 기본: 저장소 폴더에서 상대경로로 읽기
+gw <- read.csv("data/gwas_cohort.csv")
+gw$pop <- factor(gw$pop)                     # 문자열 → 범주형
+
+## 확장 변수는 iid로 합치기
+ex <- read.csv("data/gwas_cohort_ext.csv")
+gwx <- merge(gw, ex, by = "iid")
+
+## 열 이름에 '-'가 있는 파일은 check.names = FALSE
+mb <- read.csv("data/metabric.csv", check.names = FALSE)
+
+## 첫 열이 행 이름인 행렬형 파일은 row.names = 1
+cnt <- read.csv("data/rnaseq_counts.csv", row.names = 1)
+
+## 압축 파일은 gzfile()로 감싸서
+G <- as.matrix(read.csv(gzfile("data/gwas_geno_wide.csv.gz"),
+                        row.names = 1))
+
+sapply(list(gw = gw, gwx = gwx, metabric = mb, rnaseq = cnt, geno = G),
+       dim)
+```
+
+| 파일 | 주의할 점 |
+|---|---|
+| `gwas_cohort.csv` | `pop`은 `factor()`로. FH 보인자 제외는 `subset(gw, fh_carrier == 0)` (3-III부터) |
+| `gwas_cohort_ext.csv` | `iid`로 `merge`. LPL 결핍 1명(`lpl_def == 1`)은 2-II에서 제외 |
+| `metabric.csv` | `check.names = FALSE` 필수 (`3-gene_classifier` 열) |
+| `rnaseq_counts.csv` | `row.names = 1`, 행 = 유전자, 열 = 시료 |
+| `*.csv.gz` | `read.csv(gzfile(...), row.names = 1)` |
+
+### 시뮬레이션 자료 다시 만들기
+
+| 스크립트 | 시드 | 입력 | 출력 |
+|---|---|---|---|
+| `simulate_cohort.R` | 20260918 | — | `gwas_cohort.csv`, `gwas_aim_markers.csv` |
+| `simulate_rnaseq.R` | 20260919 | — | `rnaseq_*.csv` |
+| `simulate_genotypes.R` | 20260920 | `gwas_cohort.csv` | `gwas_geno_wide.csv.gz`, `gwas_tc.csv`, `gwas_geno_truth.csv` |
+| `simulate_part6_1.R` | 20260921 | `gwas_cohort.csv` | `methyl_cpg.csv`, `eqtl_ldlr.csv`, `nmr_spectrum.csv` |
+| `simulate_part6_2.R` | 20260922 | — | `cgm_glucose.csv`, `visium_*.csv`, `family_*` |
+| `simulate_cohort_ext.R` | 20260923 | `gwas_cohort.csv` | `gwas_cohort_ext.csv` |
+
+- 스크립트는 **현재 폴더**에 파일을 쓰고 읽음 → `data/`에서 실행
+
+```{r}
+#| label: regenerate
+#| eval: false
+setwd("data")
+source("../data-raw/simulate_cohort.R")      # 가장 먼저 (다른 스크립트의 입력)
+source("../data-raw/simulate_genotypes.R")
+source("../data-raw/simulate_cohort_ext.R")
+source("../data-raw/simulate_part6_1.R")
+source("../data-raw/simulate_rnaseq.R")
+source("../data-raw/simulate_part6_2.R")
+setwd("..")
+```
+
+- 시드가 고정되어 있으므로 같은 R 버전이면 **같은 파일**이 나옴
+- 시드나 식을 바꿔 참값을 바꿔 보면 방법이 언제 실패하는지 직접 실험 가능
+
+## 4. 표기법 (notation)
+
+### 변수와 모수
+
+| 기호 | 뜻 |
+|---|---|
+| $Y_i$ | $i$번째 관측의 **반응변수** (확률변수) |
+| $x_{ij}$ | $i$번째 관측의 $j$번째 **설명변수** (고정된 값으로 취급) |
+| $n$ | 표본크기 / $N$ — ANOVA의 전체 표본크기 |
+| $p$ | 설명변수 개수 (절편 제외) → 모수는 $p+1$개 |
+| $k$ | 집단 수 (ANOVA) |
+| $\beta_0, \beta_1, \dots, \beta_p$ | 회귀계수 (절편, 기울기) — **참값, 영원히 모름** |
+| $\sigma^2$ | 오차분산 |
+| $\mu_i$, $\tau_i$ | $i$번째 집단 평균, 집단 효과 (ANOVA) |
+| $\varepsilon_i$ | 오차 — 관측할 수 없음 |
+| $\mathbf Y,\ \mathbf X,\ \boldsymbol\beta,\ \boldsymbol\varepsilon$ | 벡터·행렬은 굵게 ($\mathbf X$ = 설계행렬, $n \times (p+1)$) |
+
+### 추정량과 잔차
+
+| 기호 | 뜻 | 처음 나오는 곳 |
+|---|---|---|
+| $\hat\beta_j$ | $\beta_j$의 추정량 (모자 = 추정) | 1-I |
+| $\hat y_i$ | 적합값 $= \hat\beta_0 + \hat\beta_1 x_i$ | 1-I |
+| $\hat\varepsilon_i$ ($= e_i$, $r_i$) | **잔차** $= y_i - \hat y_i$ — 오차의 추정량 | 1-I |
+| $r_i$, $r_i^*$ | 표준화잔차 (장마다 기호가 조금 다름) | 1-II, 3-III |
+| $SST,\ SSR,\ SSE$ | 전체 / 회귀로 설명된 / 남은 제곱합 | 1-I |
+| $MSE = \hat\sigma^2$ | $SSE / (n - p - 1)$ | 1-I |
+| $\mathbf H$, $h_{ii}$ | hat matrix, leverage | 3-I, 3-III |
+| $p_i$, $\mu_i$, $\eta_i$ | GLM의 확률, 평균, 선형예측자 $\mathbf x_i^T\boldsymbol\beta$ | 4-I, 4-IV |
+| $D$, $\phi$ | 이탈도, 과산포 모수 | 4-II, 4-V |
+| $h^2$ | 유전율 | 1-III, 6-II |
+
+::: {.callout-warning}
+## 헷갈리기 쉬운 것
+- **오차 $\varepsilon$ ≠ 잔차 $\hat\varepsilon$** — 가정은 오차에 대해, 진단은 잔차로
+- $SSR$과 $SSE$를 **반대로** 쓰는 책이 있음 — 이 강의는 $SSR$ = 설명된 부분
+- $p$는 설명변수 개수이면서 p-value의 $p$이기도 함 — 문맥으로 구분
+:::

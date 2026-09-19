@@ -1,0 +1,1008 @@
+---
+title: "6-I. Other Regression Models (1): WLS, Robust, Nonparametric"
+description: "가중최소제곱, 로버스트 회귀, 비선형·비모수 회귀와 GAM — 메틸화 비율, eQTL, NMR 대사체"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="6-I. 기타 회귀모형 (1): WLS, 로버스트, 비모수">
+        <meta name="ai-context" content="
+        이 챕터는 선형회귀의 가정이 하나씩 깨질 때 쓰는 대안 모형 세 가지를 다룹니다.
+        첫째, 등분산 가정이 깨지면 가중최소제곱(WLS)을 씁니다. 예제는 bisulfite 시퀀싱 메틸화 비율 M/m입니다.
+        coverage m이 사람마다 5~400으로 달라 비율의 분산이 1/m에 비례합니다. 원자료의 발병률 D/m 예제와 같은 구조입니다.
+        WLS 추정량은 (X'WX)^-1 X'WY 로 닫힌 해이며, lm(weights = m)과 소수점 아래까지 일치합니다.
+        KNU-Methyl 400명에서 성별 효과(참 0.02)는 OLS로 0.0118 (p = 0.18)로 놓치지만 WLS로 0.0212 (p = 0.00097)로 잡힙니다.
+        1000번 반복 시뮬레이션에서 OLS와 WLS는 모두 불편이며, 분산비(효율)는 나이 1.66, 성별 1.86입니다.
+        가중치를 모를 때는 잔차로 분산함수를 추정합니다. log(잔차^2)를 log(coverage)에 회귀하면 기울기 -0.81입니다.
+        RNA-seq에서 limma-voom은 lowess로 평균-분산 추세를 추정해 관측치별 가중치를 만드는 WLS입니다.
+        둘째, 이상치가 많으면 로버스트 회귀를 씁니다. 라플라스 분포의 MLE가 최소절대편차(LAD), 즉 중앙값 회귀입니다.
+        LDLR eQTL 400명(참 효과 -0.30, 라플라스 오차 + 5% 이상치)에서 OLS는 -0.215 (se 0.070),
+        LAD는 -0.282 (se 0.029), Huber M-추정은 -0.271 (se 0.027)입니다.
+        IRLS(가중치 1/|r|)로 직접 구한 LAD는 quantreg::rq와 일치합니다.
+        오차가 정규이면 LAD의 분산이 OLS의 1.58배(이론값 pi/2)로 손해이고, 라플라스이면 0.64배로 이득입니다.
+        셋째, 선형성이 깨지면 관계를 알 때는 비선형 회귀(nls), 모를 때는 비모수 회귀나 GAM을 씁니다.
+        NMR 스펙트럼은 로렌츠 피크 4개의 합이며, nls는 피크 중심과 폭을 참값에 가깝게 복원하지만 시작값이 나쁘면 실패합니다.
+        차원의 저주: p=1, n=300과 같은 정확도를 p=5에서 얻으려면 약 28762명이 필요합니다.
+        GAM은 backfitting으로 적합하며, smooth.spline으로 직접 구현한 결과가 mgcv::gam과 상관 0.9999로 일치합니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `6-I. (others) weighted, robust, nonlinear, nonparametric.docx`
+- 원자료의 예제를 생물학 자료로 교체
+
+| 원자료 | 이 장 |
+|---|---|
+| 발병률 $Y = D/m$ | CpG 메틸화 비율 $M/m$ (KNU-Methyl) |
+| 두꺼운 꼬리 분포 | LDLR eQTL — 라플라스 오차 + 이상치 |
+| NMR 주파수 자료 | 1H-NMR 대사체 스펙트럼 (시뮬레이션) |
+| 가법모형 | 메틸화 ~ s(나이) + s(BMI) |
+
+- 데이터: `data/methyl_cpg.csv`, `data/eqtl_ldlr.csv`, `data/nmr_spectrum.csv`,
+  `data/rnaseq_*.csv`, `data/gwas_cohort.csv`
+- 생성 스크립트: `data-raw/simulate_part6_1.R` (`set.seed(20260921)`)
+:::
+
+::: {.callout-important collapse="true"}
+## 이 장의 실습 자료 — 참값
+
+| 자료 | 크기 | 생성 모형 |
+|---|---|---|
+| `methyl_cpg.csv` `cgA` | 400명 | $\pi = 0.30 + 0.006(\text{age}-50) + 0.02\,\text{sex} + N(0, 0.015^2)$ |
+| `methyl_cpg.csv` `cgB` | 400명 | $\pi = 0.45 + f_1(\text{age}) + f_2(\text{bmi}) + 0.02\,\text{sex} + N(0, 0.015^2)$ |
+| `eqtl_ldlr.csv` | 400명 | $6.0 - 0.30\,g + 0.008(\text{age}-55) + 0.10\,\text{sex} + e$ |
+| `nmr_spectrum.csv` | 401점 | 로렌츠 피크 4개 + $N(0, 0.015^2)$ |
+
+- 메틸화: 메틸화 read 수 $M_i \sim \text{Binomial}(m_i, \pi_i)$, coverage $m_i$는 5~400
+  - $f_1(a) = 0.18\tanh\{(a - 40)/15\}$, $f_2(b) = 0.10 / [1 + \exp\{-(b - 27)/1.5\}]$
+- eQTL: KNU-Lipid(FH 제외)에서 400명 추출, $g$ = `snp_LDLR`
+  - $e$ = 라플라스(척도 0.30) + 20명(5%)에 $\pm 2.5 \sim 4.5$의 큰 이상치
+- NMR 피크
+
+| 대사체 | 중심 $\mu_l$ (ppm) | 높이 $A_l$ |
+|---|---|---|
+| valine | 1.04 | 0.60 |
+| 3-hydroxybutyrate | 1.20 | 0.35 |
+| lactate | 1.33 | 1.00 |
+| alanine | 1.48 | 0.45 |
+
+- 폭 $\tau = 0.006$ ppm (네 피크 공통)
+:::
+
+```{r}
+#| label: setup
+#| include: false
+suppressMessages({
+  library(MASS); library(quantreg); library(mgcv)
+})
+```
+
+## 1. Weighted Least Squares Regression
+
+### 1.1 등분산 가정이 깨질 때
+
+- **Data**: $\{(x_{11}, \dots, x_{1p}), Y_1\}, \dots, \{(x_{n1}, \dots, x_{np}), Y_n\}$
+- **Model**
+
+$$Y_i = \beta_0 + \beta_1 x_{i1} + \cdots + \beta_p x_{ip} + \epsilon_i,
+\qquad i = 1, \dots, n$$
+
+| 가정 | 내용 |
+|---|---|
+| Linearity / Mean zero | $E(\epsilon_i) = 0$ |
+| **Constant variance** | $V(\epsilon_i) = \sigma^2$ |
+| Independence | $\epsilon_1, \dots, \epsilon_n$ 서로 독립 |
+| Normality | $\epsilon_i \sim$ Normal |
+
+- 추정에는 앞 세 가정만 필요, 추론(CI·검정)에는 정규성까지 필요
+- 이 절은 **등분산 가정** 하나에 집중
+  - 등분산 = 모형이 모집단의 어떤 부분에서는 더 정확하고 어떤 부분에서는 덜 정확할 수 없음
+- 위배되면
+  - 추정량은 여전히 불편이나 **비효율적** — 더 정밀하게 추정할 수 있었는데 못 함
+  - **예측구간의 보정(calibration)이 틀어짐** — 분산이 큰 곳은 너무 좁고, 작은 곳은 너무 넓음
+
+#### 분산안정화 변환
+
+- $Y$를 변환해 분산을 일정하게 만듦 — 앞 장들에서 쓴 방식
+  - 카운트 → $\sqrt{Y}$ 또는 $\log Y$, 비율 → $\arcsin\sqrt{Y}$
+- 한계
+  - 해석 척도가 바뀜
+  - 분산이 **왜** 다른지 알고 있어도 그 정보를 쓰지 못함
+
+#### 가중최소제곱
+
+- 회귀모형은 그대로, **관측치마다 다른 분산**을 허용
+- 정밀한 관측치는 크게, 부정확한 관측치는 작게 반영
+- 약칭 **WLS** (weighted least squares)
+
+### 1.2 예제 — 비율 자료
+
+$$Y_i = \frac{D_i}{m_i}, \qquad
+V(Y_i) = \frac{\sigma^2}{m_i}$$
+
+- 원자료 예: $D_i$ = 질환자 수, $m_i$ = 인구 수, $Y_i$ = 발병률
+  - 성공 횟수와 시행 횟수를 따로 기록하지 않고 **비율만** 남은 이항 자료
+- $m_i$가 크면 중심극한정리로 **정규근사는 가능**
+- 그러나 분산이 $m_i$에 따라 달라짐 → **정규성은 되고 등분산은 안 되는 고전적 예**
+- 오믹스에서 정확히 같은 구조 — **bisulfite 시퀀싱 메틸화 비율**
+
+| | 원자료 | 메틸화 |
+|---|---|---|
+| 분자 $D_i$ | 질환자 수 | 메틸화된 read 수 $M_i$ |
+| 분모 $m_i$ | 인구 수 | 그 CpG를 덮은 read 수 (coverage) |
+| $Y_i$ | 발병률 | 메틸화 비율 ($\beta$ value) |
+
+- RRBS·WGBS에서 coverage는 CpG마다, 사람마다 수십 배 차이 남
+  - 같은 0.3이라도 read 5개에서 나온 0.3과 read 400개에서 나온 0.3은 **신뢰도가 전혀 다름**
+
+```{r}
+#| label: methyl-load
+me <- read.csv("data/methyl_cpg.csv")
+me$y <- me$meth_A / me$cov_A           # CpG A의 메틸화 비율
+dim(me)
+summary(me$cov_A)
+```
+
+```{r}
+#| label: methyl-plot
+#| fig-cap: "나이와 메틸화 비율(점 크기 = coverage), OLS 잔차의 깔때기"
+#| fig-width: 8
+#| fig-height: 4
+ols <- lm(y ~ age + sex, data = me)
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+plot(me$age, me$y, pch = 19, cex = sqrt(me$cov_A) / 8,
+     col = adjustcolor("#4c72b0", 0.5),
+     xlab = "Age", ylab = "Methylation (M/m)", main = "cgA")
+plot(me$cov_A, resid(ols), log = "x", pch = 19,
+     col = adjustcolor("#dd8452", 0.6),
+     xlab = "Coverage m (log scale)", ylab = "OLS residual",
+     main = "Funnel")
+abline(h = 0, lty = 2)
+par(op)
+```
+
+```{r}
+#| label: resid-by-cov
+## coverage 구간별 잔차 표준편차
+grp <- cut(me$cov_A, c(0, 15, 40, 100, 400))
+rbind(n = table(grp), resid_sd = round(tapply(resid(ols), grp, sd), 4))
+```
+
+- coverage 15 이하 구간의 잔차 SD가 100 초과 구간의 **3.5배**
+- 이항분산 $\pi(1-\pi)/m$의 모양 그대로 — $m$이 4배면 SD는 약 절반
+
+### 1.3 WLS의 가정 — 공분산 구조
+
+- 오차 벡터 $\boldsymbol\epsilon = (\epsilon_1, \dots, \epsilon_n)^\top$에 대해
+
+| 가정 | 내용 |
+|---|---|
+| Linearity / Mean zero | $E(\boldsymbol\epsilon) = \mathbf 0$ |
+| **Covariance-variance** | $V(\boldsymbol\epsilon) = \boldsymbol\Sigma$ |
+| Independence | $\boldsymbol\Sigma$가 **대각행렬**일 때만 성립 |
+| Normality | $\boldsymbol\epsilon \sim$ Normal |
+
+- 일반 WLS는 $\boldsymbol\Sigma$가 비대각이어도 됨 → **상관된 오차**까지 허용
+- 흔히 쓰는 구현(R의 `lm(weights = )`)은 대각 $\boldsymbol\Sigma$
+- 비대각 $\boldsymbol\Sigma$는 6-II의 시계열·공간·혼합효과 모형에서 다시 등장
+
+### 1.4 beta의 추정
+
+$$\hat{\boldsymbol\beta} = \arg\min_{\boldsymbol\beta}\
+(\mathbf Y - \mathbf X\boldsymbol\beta)^\top\boldsymbol\Sigma^{-1}
+(\mathbf Y - \mathbf X\boldsymbol\beta)$$
+
+$$\hat{\boldsymbol\beta} =
+(\mathbf X^\top\boldsymbol\Sigma^{-1}\mathbf X)^{-1}
+\mathbf X^\top\boldsymbol\Sigma^{-1}\mathbf Y$$
+
+- 여전히 최소제곱, 여전히 **닫힌 해**
+- 차이는 오차를 표준오차로 **가중**한다는 것 — $\boldsymbol\Sigma^{-1}$이 목적함수에 들어감
+- 상관이 있으면 먼저 **탈상관(decorrelate)** 한 뒤 OLS를 한 것과 같음
+
+$$\boldsymbol\Sigma^{-1/2}\mathbf Y = \boldsymbol\Sigma^{-1/2}\mathbf X\boldsymbol\beta
++ \boldsymbol\Sigma^{-1/2}\boldsymbol\epsilon,
+\qquad V(\boldsymbol\Sigma^{-1/2}\boldsymbol\epsilon) = \mathbf I$$
+
+### 1.5 통계적 성질
+
+$$E(\hat{\boldsymbol\beta}) = \boldsymbol\beta,
+\qquad
+V(\hat{\boldsymbol\beta}) =
+(\mathbf X^\top\boldsymbol\Sigma^{-1}\mathbf X)^{-1}$$
+
+- **불편성 유지**, 분산만 바뀜
+- 정규성 가정 하에서 $\hat{\boldsymbol\beta}$의 표본분포도 정규 → 다중회귀의 추론 절차가 **전부 그대로**
+- $\boldsymbol\Sigma$를 알면 WLS가 BLUE (Gauss–Markov) → OLS보다 분산이 작거나 같음
+
+::: {.callout-important}
+## 핵심 단서
+- $\boldsymbol\Sigma$를 **알아야** 함 — 추론뿐 아니라 $\hat{\boldsymbol\beta}$ 계산 자체에 필요
+- 그래서 "$\boldsymbol\Sigma$를 어떻게 얻는가"가 WLS의 실제 문제
+:::
+
+### 1.6 가중치 정하기
+
+#### 관측치 수에 반비례하는 경우
+
+- 가장 흔한 구현 — 오차는 무상관, 분산만 다름 (simple WLS)
+
+$$V(\epsilon_i) = w_i\,\sigma^2$$
+
+- $w_i$ — $i$번째 관측치가 $\hat{\boldsymbol\beta}$ 추정에서 갖는 **중요도**를 정하는 가중치
+- 1.2의 예: $V(Y_i) = \sigma^2/m_i$ → $w_i = 1/m_i$ — **알려져 있음**
+
+::: {.callout-warning}
+## 표기 주의 — 원자료의 가중치와 R의 `weights`는 서로 역수
+- 원자료(강의) $w_i$ = **분산 배수** — 클수록 덜 믿을 관측치
+- R `lm(weights = v)`의 $v_i$ = **정밀도** $= 1/w_i$ — 클수록 더 믿을 관측치
+- 메틸화 예제: $w_i = 1/m_i$ → R에는 `weights = cov_A` ($= m_i$)를 넣음
+:::
+
+- R의 `weights` $v_i$로 쓰면
+
+$$\hat{\boldsymbol\beta} = (\mathbf X^\top\mathbf V\mathbf X)^{-1}\mathbf X^\top\mathbf V\mathbf Y,
+\qquad \mathbf V = \mathrm{diag}(v_1, \dots, v_n)$$
+
+$$\hat\sigma^2 = \frac{\sum_i v_i r_i^2}{n - p - 1},
+\qquad
+\widehat V(\hat{\boldsymbol\beta}) = \hat\sigma^2(\mathbf X^\top\mathbf V\mathbf X)^{-1}$$
+
+#### 가중치를 모를 때의 추정
+
+| 방법 | 내용 | 오믹스 예 |
+|---|---|---|
+| 외부 정보 | 측정오차 등 분산을 미리 앎 — **드묾** | 메타분석의 연구별 표준오차 |
+| 반복측정 | 같은 $x_i$에서 여러 번 관측 → $w_i\sigma^2 = \sigma_i^2$를 표본분산으로 | 기술반복(technical replicate) |
+| 평활함수 | $w_i = w(x_i)$를 비모수회귀로 추정 | **limma-voom**의 평균-분산 추세 |
+
+- R: 가중치 벡터만 지정하면 나머지는 `lm()` 그대로
+- 설명변수 하나에 대한 분산함수 추정은 `lowess()`가 가장 간단
+
+### 1.7 Data Example — KNU-Methyl
+
+```{r}
+#| label: wls-fit
+wls <- lm(y ~ age + sex, data = me, weights = cov_A)
+tab <- rbind(OLS_age = summary(ols)$coef["age", ],
+             WLS_age = summary(wls)$coef["age", ],
+             OLS_sex = summary(ols)$coef["sex", ],
+             WLS_sex = summary(wls)$coef["sex", ])
+signif(tab, 4)
+```
+
+| | 추정치 | 표준오차 | p-value | 참값 |
+|---|---|---|---|---|
+| 나이 — OLS | 0.00580 | 0.000237 | $3.3\times10^{-81}$ | 0.006 |
+| 나이 — WLS | 0.00587 | **0.000173** | $2.7\times10^{-119}$ | 0.006 |
+| 성별 — OLS | 0.0118 | 0.00885 | **0.18** | 0.02 |
+| 성별 — WLS | 0.0212 | **0.00637** | **0.00097** | 0.02 |
+
+- 나이는 워낙 강해 둘 다 잡힘, 표준오차만 27% 줄어듦
+- **성별 효과는 OLS가 놓치고 WLS가 잡음**
+  - OLS는 read 5개짜리 관측치와 400개짜리를 같은 무게로 평균 → 잡음에 묻힘
+  - OLS 추정치 0.0118은 참값 0.02에서 1 SE 정도 벗어난 것 — 불편이지만 흔들림이 큼
+
+```{r}
+#| label: wls-formula
+## 공식 직접 계산: (X'VX)^{-1} X'VY 와 lm(weights) 비교
+X <- model.matrix(~ age + sex, data = me)
+v <- me$cov_A; y <- me$y
+XtV <- t(X * v)                              # X'V
+b   <- solve(XtV %*% X, XtV %*% y)
+r   <- y - X %*% b
+s2  <- sum(v * r^2) / (nrow(X) - ncol(X))
+se  <- sqrt(diag(s2 * solve(XtV %*% X)))
+c(max_diff_beta = max(abs(b - coef(wls))),
+  max_diff_se   = max(abs(se - summary(wls)$coef[, 2])))
+
+## 변환 관점: sqrt(v)를 곱한 자료에 OLS
+bt <- coef(lm(I(sqrt(v) * y) ~ 0 + I(sqrt(v) * X)))
+max(abs(bt - coef(wls)))
+```
+
+- 닫힌 해와 `lm(weights = )`가 기계 정밀도 수준($10^{-16}$)에서 일치
+- $\sqrt{v_i}$를 곱해 등분산으로 만든 뒤 OLS를 해도 같은 답 — 1.4의 "탈상관 후 OLS"
+
+```{r}
+#| label: wls-mc
+## 반복 시뮬레이션: 같은 설계(나이·성별·coverage)로 1000번 다시 생성
+set.seed(1)
+sim <- t(replicate(1000, {
+  p  <- 0.30 + 0.006 * (me$age - 50) + 0.02 * me$sex +
+    rnorm(nrow(me), 0, 0.015)
+  yy <- rbinom(nrow(me), me$cov_A, p) / me$cov_A
+  o  <- summary(lm(yy ~ age + sex, data = me))$coef
+  w  <- summary(lm(yy ~ age + sex, data = me, weights = cov_A))$coef
+  c(o[2:3, 1], w[2:3, 1], o[2:3, 2], w[2:3, 2])
+}))
+colnames(sim) <- c("OLS_age", "OLS_sex", "WLS_age", "WLS_sex",
+                   "seOLS_age", "seOLS_sex", "seWLS_age", "seWLS_sex")
+signif(rbind(mean = colMeans(sim), sd = apply(sim, 2, sd))[, 1:4], 4)
+## 효율: Var(OLS) / Var(WLS)
+round(apply(sim[, 1:2], 2, var) / apply(sim[, 3:4], 2, var), 3)
+## 보고된 표준오차의 평균 (실제 SD와 비교)
+signif(colMeans(sim[, 5:8]), 4)
+```
+
+| | OLS 평균 | WLS 평균 | OLS SD | WLS SD | 효율 |
+|---|---|---|---|---|---|
+| 나이 (참 0.006) | 0.005996 | 0.005995 | 0.000234 | 0.000182 | **1.66** |
+| 성별 (참 0.02) | 0.02015 | 0.01993 | 0.00946 | 0.00694 | **1.86** |
+
+- 두 추정량 모두 **불편** — 평균이 참값과 일치 (1.5의 $E(\hat\beta) = \beta$)
+- WLS의 표본분산이 OLS보다 **1.7~1.9배 작음** — 같은 자료로 표본을 두 배 가까이 늘린 효과
+- 보고된 표준오차 평균은 실제 SD와 비슷함 (OLS 0.000248 vs 0.000234)
+  - 이 자료에서는 OLS의 표준오차가 크게 틀리지는 않음 — **문제는 비효율**
+  - 이분산이 $x$와 얽혀 있으면 OLS 표준오차 자체가 틀림 (→ 3-II의 robust SE)
+
+::: {.callout-tip}
+## 이항 GLM과의 관계
+- 메틸화 read 수는 원래 이항 자료 → 4-I의 로지스틱 회귀(`cbind(M, m - M)`)가 정석
+- WLS는 "비율 + 정규근사 + 가중치 $m_i$"로 같은 정보를 쓰는 근사
+- 실제로는 사람 간 생물학적 변동이 더해져 이항분산보다 큼 → **베타-이항**
+  (`DSS`, `methylKit`)이나 quasi-binomial이 표준
+:::
+
+### 1.8 가중치를 모를 때 — 분산함수 추정
+
+- coverage를 가중치로 쓸 수 있다는 걸 **모른다고 치고**, 잔차로부터 분산함수를 추정
+
+```{r}
+#| label: var-function
+## 분산이 m^k에 비례한다면 log(r^2) ~ log(m)의 기울기가 k
+coef(lm(log(resid(ols)^2) ~ log(cov_A), data = me))
+
+## lowess로 분산을 coverage의 평활함수로 추정 → 그 역수를 가중치로
+lo   <- lowess(log(me$cov_A), log(resid(ols)^2))
+vhat <- exp(approx(lo$x, lo$y, xout = log(me$cov_A), ties = mean)$y)
+wls2 <- lm(y ~ age + sex, data = me, weights = 1 / vhat)
+signif(rbind(known_w = summary(wls)$coef["sex", ],
+             est_w   = summary(wls2)$coef["sex", ]), 4)
+```
+
+- 기울기 **−0.81** — 이론값 −1(이항분산)에 가까움
+  - −1보다 완만한 이유: coverage가 커져도 사람 간 생물학적 변동($0.015^2$)은 줄지 않음
+- 추정한 가중치로도 성별 효과 0.0206 (p = 0.0016) — 참 가중치 결과와 거의 같음
+- 평활함수 방법은 분산 구조를 **몰라도** 자료에서 찾아냄
+
+#### RNA-seq의 limma-voom
+
+- voom = **평활함수로 가중치를 추정하는 WLS** 그 자체
+  1. 유전자마다 log-CPM에 선형모형 적합 → 잔차 SD
+  2. $\sqrt{\text{SD}}$를 평균 log-count에 `lowess` → **평균-분산 추세**
+  3. 각 관측치의 적합값을 추세에 넣어 분산 예측 → 역수가 가중치
+  4. 가중치를 넣은 `lm` (여기에 limma의 경험적 베이즈가 더해짐)
+- 4-IV/V의 KNU-RNA 자료에 적용
+
+```{r}
+#| label: voom-trend
+#| fig-cap: "평균-분산 추세 — 발현량이 낮은 유전자일수록 log-CPM의 변동이 큼"
+#| fig-width: 6
+#| fig-height: 4.5
+cnt <- as.matrix(read.csv("data/rnaseq_counts.csv", row.names = 1))
+smp <- read.csv("data/rnaseq_samples.csv")
+tru <- read.csv("data/rnaseq_truth.csv", row.names = 1)
+smp$group <- factor(smp$group, levels = c("Control", "Treated"))
+smp$batch <- factor(smp$batch)
+lib  <- smp$lib_size
+lcpm <- t(log2((t(cnt) + 0.5) / (lib + 1) * 1e6))     # log2 CPM
+Xr   <- model.matrix(~ group + batch, data = smp)
+fr   <- lm.fit(Xr, t(lcpm))                   # 유전자 500개를 한 번에
+sdg  <- sqrt(colSums(fr$residuals^2) / (ncol(cnt) - ncol(Xr)))
+abar <- rowMeans(lcpm) + mean(log2(lib + 1)) - log2(1e6)
+lo   <- lowess(abar, sqrt(sdg), f = 0.5)
+trend <- approxfun(lo$x, lo$y, rule = 2)
+plot(abar, sqrt(sdg), pch = 19, col = adjustcolor("#4c72b0", 0.4),
+     xlab = "Average log2 count", ylab = "sqrt(residual SD)")
+lines(lo, col = "#c44e52", lwd = 2)
+```
+
+```{r}
+#| label: voom-weights
+## 관측치(유전자 x 시료)별 가중치 = 1 / 예측 분산
+lc <- sweep(t(fr$fitted.values), 2, log2(lib + 1) - log2(1e6), "+")
+W  <- lc
+W[] <- 1 / trend(lc)^4
+round(range(W), 3)
+
+## 유전자 하나: G0021 (참 log2FC 1.2, 과산포)
+g <- "G0021"
+rbind(OLS = summary(lm(lcpm[g, ] ~ group + batch,
+                       data = smp))$coef[2, ],
+      WLS = summary(lm(lcpm[g, ] ~ group + batch, data = smp,
+                       weights = W[g, ]))$coef[2, ])
+```
+
+```{r}
+#| label: voom-scan
+## 500개 유전자 전체: Bonferroni 기준 위양성·진양성
+scan <- function(use_w) t(sapply(rownames(lcpm), function(g) {
+  w <- if (use_w) W[g, ] else rep(1, ncol(lcpm))
+  summary(lm(lcpm[g, ] ~ group + batch, data = smp,
+             weights = w))$coef[2, c(1, 4)]
+}))
+so <- scan(FALSE); sw <- scan(TRUE)
+de <- tru$is_de == 1; thr <- 0.05 / nrow(lcpm)
+rbind(OLS = c(FP = sum(so[!de, 2] < thr), TP = sum(so[de, 2] < thr)),
+      WLS = c(FP = sum(sw[!de, 2] < thr), TP = sum(sw[de, 2] < thr)),
+      n = c(sum(!de), sum(de)))
+```
+
+- 가중치 범위 0.07~16.8 — 같은 유전자라도 라이브러리 크기에 따라 관측치 신뢰도가 다름
+- `G0021`: OLS log2FC 1.42, WLS 1.54 (참 1.2) — 시료가 12개씩뿐이라 둘 다 흔들림
+- 전체 스캔: 위양성은 둘 다 0, 진양성은 둘 다 34/59
+  - **유전자 하나씩 검정할 때는 이득이 작음** — 표본 간 신뢰도 차이만 반영하기 때문
+  - limma는 여기에 **유전자 간 분산 정보 공유**(경험적 베이즈)를 더해 검정력을 얻음
+- 4-V의 음이항 GLM과 voom-limma는 같은 문제(평균-분산 관계)에 대한 두 해법
+
+## 2. Robust Regression
+
+### 2.1 이상치가 있을 때
+
+- 이상치의 유무는 다중회귀의 **명시적 가정은 아님**
+- 그러나 이상치가 있으면 → 오차 분포의 **꼬리가 두꺼워짐**
+  → 잔차가 대칭이어도 **정규성 가정 위배**
+- 정규성은 CI·PI·가설검정에 필요 → 위배 시 이 모든 것이 크게 오도될 수 있음
+
+#### 한두 개면 제거 후 비교
+
+- 3-III에서 한 방식: 지우고 다시 적합 → 두 모형 비교
+- KNU-Lipid의 FH 보인자 6명이 그 예
+
+```{r}
+#| label: fh-robust
+gw <- read.csv("data/gwas_cohort.csv")
+f  <- ldl ~ snp_LDLR + age + sex + bmi
+fh <- rbind(
+  OLS_all  = coef(lm(f, data = gw))[2],
+  OLS_noFH = coef(lm(f, data = subset(gw, fh_carrier == 0)))[2],
+  LAD_all  = coef(rq(f, data = gw))[2],
+  Huber_all = coef(rlm(f, data = gw))[2])
+round(cbind(fh, truth = 0.28), 4)
+```
+
+- OLS는 FH 6명 때문에 0.326 → 제거하면 0.253 (3-III)
+- **로버스트 추정은 FH를 지우지 않고도** 0.269 (Huber), 0.292 (LAD) — 영향점에 끌려가지 않음
+
+#### 많으면 로버스트 모형
+
+- 이상치가 많으면 하나씩 지우고 비교하는 방식은 해석·비교가 너무 복잡해짐
+- 이상치가 많다는 것 = 오차 분포 자체가 두꺼운 꼬리 → **정규성 위배**
+- 이상치에 강건한(robust) 추정·추론이 필요
+
+### 2.2 예제 — 두꺼운 꼬리 분포
+
+$$f(y \mid \mu, \sigma) = \frac{1}{2\sigma}\,e^{-|y - \mu|/\sigma}$$
+
+- 라플라스(이중지수) 분포 — 정규분포와 달리 $(y-\mu)^2$ 대신 $|y - \mu|$
+- 대칭이지만 **정규보다 꼬리가 두꺼움**
+
+```{r}
+#| label: laplace-plot
+#| fig-cap: "분산이 같은 정규분포와 라플라스 분포 — 라플라스는 가운데가 뾰족하고 꼬리가 두꺼움"
+#| fig-width: 6
+#| fig-height: 4
+xx <- seq(-4, 4, length.out = 400)
+b  <- 1 / sqrt(2)                          # 분산 1이 되는 척도
+plot(xx, dnorm(xx), type = "l", lwd = 2, col = "#4c72b0",
+     ylim = c(0, 0.72), xlab = "y", ylab = "density")
+lines(xx, exp(-abs(xx) / b) / (2 * b), lwd = 2, col = "#dd8452")
+legend("topright", c("Normal", "Laplace"), lwd = 2,
+       col = c("#4c72b0", "#dd8452"), bty = "n")
+```
+
+- 오믹스 대응: **eQTL 발현량**
+  - 시료 분해(RIN 낮음), 시료 뒤바뀜, 드문 조절 변이 → 발현 이상치가 흔함
+  - GTEx 같은 대규모 eQTL 연구도 이상치 발현이 **별도 연구 주제**일 만큼 많음
+- 예제: `snp_LDLR`가 LDLR 발현을 낮추는 eQTL (참 효과 −0.30), 400명
+
+```{r}
+#| label: eqtl-load
+eq <- read.csv("data/eqtl_ldlr.csv")
+fe <- expr ~ snp_LDLR + age + sex
+oe <- lm(fe, data = eq)
+re <- resid(oe)
+c(n = nrow(eq), sd = sd(re), mad = mad(re),
+  kurtosis = mean((re - mean(re))^4) / var(re)^2,
+  n_abs_rstd_gt3 = sum(abs(rstandard(oe)) > 3))
+```
+
+```{r}
+#| label: eqtl-plot
+#| fig-cap: "LDLR 발현과 유전형(왼쪽), OLS 잔차의 정규 QQ 그림(오른쪽) — 양쪽 꼬리가 크게 벗어남"
+#| fig-width: 8
+#| fig-height: 4
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+boxplot(expr ~ snp_LDLR, data = eq, col = "#dce6f2",
+        xlab = "snp_LDLR (risk allele count)", ylab = "LDLR expression",
+        outline = FALSE, ylim = range(eq$expr))
+stripchart(expr ~ snp_LDLR, data = eq, vertical = TRUE, add = TRUE,
+           method = "jitter", pch = 19, cex = 0.5,
+           col = adjustcolor("#4c72b0", 0.5))
+qqnorm(re, pch = 19, col = adjustcolor("#dd8452", 0.6), main = "")
+qqline(re)
+par(op)
+```
+
+- 잔차 첨도 16.4 (정규는 3), 표준화 잔차 $|r| > 3$이 16명
+- 잔차 SD 0.863 vs MAD 0.297 — 이상치가 SD만 부풀림
+
+### 2.3 beta의 추정
+
+- 핵심: **평균 대신 중앙값**
+- 라플라스 분포에서 $\mu$의 MLE
+
+$$\hat\mu = \arg\min_\mu \sum_{i=1}^{n} |Y_i - \mu|
+= \text{sample median}$$
+
+- 이때 $\mu$는 기댓값이 아니라 **분포의 중앙값**
+
+```{r}
+#| label: median-mle
+## 절대편차합을 수치로 최소화 = 표본 중앙값
+y0  <- eq$expr[eq$snp_LDLR == 0]
+opt <- optimize(function(mu) sum(abs(y0 - mu)), range(y0))
+c(argmin = opt$minimum, median = median(y0), mean = mean(y0))
+```
+
+- 회귀로 옮기면 제곱합 대신 **절대편차합**을 최소화 — LAD (least absolute deviation)
+
+$$\hat{\boldsymbol\beta} = \arg\min_{\boldsymbol\beta}
+\sum_{i=1}^{n}\bigl|Y_i - (\beta_0 + \beta_1 x_{i1} + \cdots + \beta_p x_{ip})\bigr|$$
+
+- 닫힌 해 없음 → **반복재가중 최소제곱 (IRLS)**
+  - $|r_i| = r_i^2 / |r_i|$ 이므로 가중치 $v_i = 1/|r_i|$인 WLS를 반복
+  - 추정치가 거의 안 변할 때까지 → 1절의 WLS가 로버스트 회귀의 **엔진**
+
+$$\hat{\boldsymbol\beta}^{(t+1)} =
+(\mathbf X^\top\mathbf V^{(t)}\mathbf X)^{-1}\mathbf X^\top\mathbf V^{(t)}\mathbf Y,
+\qquad v_i^{(t)} = \frac{1}{|r_i^{(t)}|}$$
+
+```{r}
+#| label: lad-irls
+## 공식 직접 계산: IRLS로 LAD → quantreg::rq(tau = 0.5)와 비교
+X <- model.matrix(fe, data = eq); y <- eq$expr
+b <- coef(oe)                                # OLS에서 출발
+for (it in 1:500) {
+  r  <- as.vector(y - X %*% b)
+  v  <- 1 / pmax(abs(r), 1e-6)
+  bn <- coef(lm.wfit(X, y, v))
+  if (max(abs(bn - b)) < 1e-10) break
+  b <- bn
+}
+le <- rq(fe, data = eq, tau = 0.5)
+rbind(IRLS = b, rq = coef(le))
+c(iterations = it, sum_abs_IRLS = sum(abs(y - X %*% b)),
+  sum_abs_rq = sum(abs(y - X %*% coef(le))))
+```
+
+- IRLS 50회 반복 → `rq`와 SNP 계수가 소수 7자리까지 같고, 절대편차합이 동일 (170.704)
+- `rq`는 선형계획법(simplex)으로 정확한 해를 구함 — IRLS는 근사
+
+### 2.4 OLS vs. robust regression
+
+| | OLS | Robust (LAD) |
+|---|---|---|
+| 추정 | $\min\sum_i (Y_i - \mathbf x_i^\top\boldsymbol\beta)^2$ | $\min\sum_i \lvert Y_i - \mathbf x_i^\top\boldsymbol\beta\rvert$ |
+| 추정 대상 | $E(Y \mid x_1, \dots, x_p)$ | $\text{median}(Y \mid x_1, \dots, x_p)$ |
+| 해 | 닫힌 해 | 수치 알고리즘 (IRLS·선형계획) |
+| $\sigma$ 추정 | $\sum_i r_i^2 / (n-p-1)$ | $\sum_i \hat v_i r_i^2 / (n-p-1)$ |
+
+- 기댓값과 중앙값은 둘 다 중심 위치의 척도, 그러나 **중앙값만 이상치에 강건**
+- $\sigma$ 추정의 $\hat v_i$는 IRLS 마지막 단계의 가중치
+  - LAD에서는 $\hat v_i = 1/|r_i|$ → $\sum_i |r_i|/(n-p-1)$ = 라플라스 척도 $\sigma$의 추정
+
+::: {.callout-note}
+## LAD 말고도 — M-추정
+- 일반형: $\min\sum_i \rho(r_i)$ — $\rho$를 무엇으로 두느냐가 방법의 차이
+
+| $\rho(r)$ | 방법 | R |
+|---|---|---|
+| $r^2$ | OLS | `lm` |
+| $\lvert r\rvert$ | LAD (중앙값 회귀) | `quantreg::rq` |
+| 작은 $r$은 $r^2$, 큰 $r$은 $\lvert r\rvert$ | **Huber** M-추정 | `MASS::rlm` |
+
+- Huber는 두 방법의 절충 — 가운데는 OLS처럼 효율적, 꼬리는 LAD처럼 강건
+- `rq(tau = )`를 바꾸면 중앙값이 아닌 **분위수 회귀**가 됨
+:::
+
+```{r}
+#| label: eqtl-compare
+he  <- rlm(fe, data = eq)
+cmp <- rbind(OLS   = summary(oe)$coef["snp_LDLR", 1:2],
+             LAD   = summary(le, se = "nid")$coef["snp_LDLR", 1:2],
+             Huber = summary(he)$coef["snp_LDLR", 1:2])
+cmp <- cbind(cmp, z = cmp[, 1] / cmp[, 2])
+round(cbind(cmp, p = 2 * pnorm(-abs(cmp[, "z"])), truth = -0.30), 5)
+
+## 참고: |표준화 잔차| > 3 을 지우고 OLS
+ok <- abs(rstandard(oe)) <= 3
+summary(lm(fe, data = eq[ok, ]))$coef["snp_LDLR", ]
+```
+
+| 방법 | 추정치 | 표준오차 | p-value | 참값 |
+|---|---|---|---|---|
+| OLS | −0.215 | 0.070 | 0.0020 | −0.30 |
+| LAD | −0.282 | **0.029** | $7\times10^{-22}$ | −0.30 |
+| Huber | −0.271 | **0.027** | $2\times10^{-23}$ | −0.30 |
+| OLS (16명 제거) | −0.280 | 0.036 | $1.5\times10^{-13}$ | −0.30 |
+
+- OLS 표준오차가 로버스트의 **2.4배** — 이상치가 잔차분산을 부풀림
+- eQTL 스캔에서 이 차이는 p-value 20자릿수 차이 → 발견 여부가 갈림
+- 이상치를 지운 OLS도 회복되지만, **무엇을 지울지**를 분석자가 정해야 함
+
+::: {.callout-tip}
+## 실제 eQTL 분석에서는
+- 발현량에 **순위 기반 역정규변환(inverse normal transform)** 을 먼저 적용하는 것이 표준 (GTEx, eQTLGen)
+- 꼬리를 강제로 정규로 바꾸는 방법 — "Y 변환"에 해당
+- 로버스트 회귀는 변환 없이 원래 척도의 효과를 유지한다는 장점
+:::
+
+### 2.5 왜 항상 robust를 쓰지 않는가
+
+- 이상치에 강건하다면 늘 쓰면 되지 않나?
+- 이유 1 — **닫힌 해가 없음**
+  - 수치 알고리즘(IRLS)으로 근사 → 추론도 표본분포의 근사에 의존
+- 이유 2 — **신뢰구간이 넓음** → 오차가 정말 정규일 때는 비효율적, 추론이 보수적
+
+```{r}
+#| label: efficiency-mc
+## 같은 분산의 정규 오차 vs 라플라스 오차에서 OLS와 LAD의 표본분산
+set.seed(11)
+rlap <- function(k, b) sample(c(-1, 1), k, TRUE) * rexp(k, 1 / b)
+g <- eq$snp_LDLR
+mc <- function(err) t(replicate(500, {
+  yy <- 6 - 0.30 * g + err(length(g))
+  c(OLS = coef(lm(yy ~ g))[[2]], LAD = coef(rq(yy ~ g))[[2]])
+}))
+sN <- mc(function(k) rnorm(k, 0, 0.30 * sqrt(2)))
+sL <- mc(function(k) rlap(k, 0.30))
+rbind(normal_mean = colMeans(sN), laplace_mean = colMeans(sL),
+      normal_sd = apply(sN, 2, sd), laplace_sd = apply(sL, 2, sd))
+## Var(LAD) / Var(OLS)
+c(normal  = var(sN[, "LAD"]) / var(sN[, "OLS"]),
+  laplace = var(sL[, "LAD"]) / var(sL[, "OLS"]))
+```
+
+| 오차 분포 | Var(LAD) / Var(OLS) | 이론값 | 판정 |
+|---|---|---|---|
+| 정규 | **1.58** | $\pi/2 = 1.57$ | OLS 승 |
+| 라플라스 | **0.64** | 0.5 (대표본) | LAD 승 |
+
+- 두 방법 모두 불편 (평균 −0.30)
+- 정규 오차에서 LAD는 표본의 **약 37%를 버린 것**과 같음
+- 앞의 KNU-Lipid(FH 제외, 오차 정규)에서도 같은 현상
+
+```{r}
+#| label: efficiency-ldl
+gwc <- subset(gw, fh_carrier == 0)
+rbind(OLS = summary(lm(f, data = gwc))$coef["snp_LDLR", 1:2],
+      LAD = summary(rq(f, data = gwc),
+                    se = "nid")$coef["snp_LDLR", 1:2])
+```
+
+- LAD의 표준오차가 OLS보다 20% 큼 (0.0321 vs 0.0268)
+- **결론: 잔차 진단으로 꼬리를 먼저 보고 고를 것** — 정규면 OLS, 두꺼우면 로버스트
+
+## 3. Nonlinear and Nonparametric Regression
+
+### 3.1 선형성 가정이 깨질 때
+
+- **Linearity / Mean zero**: $E(\epsilon_i) = 0$ — 이것이 깨지는 상황 세 가지
+
+#### 관계를 모를 때 — 변환
+
+- 몇 개의 양적 설명변수에서만 안 맞으면 → $X$ 또는 $Y$의 여러 변환을 시도
+- 앞 장들에서 쓴 방식 (로그, 다항식 등)
+
+#### 관계를 알 때 — 비선형 회귀
+
+- $Y$와 $X$의 관계가 **알려져 있지만**, 변환된 설명변수들의 합으로는 표현이 안 됨
+- → **nonlinear regression**
+
+#### 여러 변수가 안 맞을 때 — 가법모형
+
+- 여러 변수에서 선형성이 깨지고 적절한 변환을 찾기 어려움
+- → **generalized additive model (GAM)**, 비모수 모형
+
+### 3.2 예제 — NMR 스펙트럼
+
+$$Y_i = \sum_{l=1}^{L} \frac{A_l}{\dfrac{(x_i - \mu_l)^2}{\tau^2} + 1} + \varepsilon_i$$
+
+- 원자료(강의자의 연구 예): 질량분석·**NMR 주파수** 자료
+  - $x$ — 주파수 (chemical shift, ppm), $L$ — 성분 수 (**알고 있음**)
+  - $\mu_l$ — 피크 중심, $A_l$ — 피크 높이, $\tau$ — 폭
+  - 성분 하나 = 로렌츠(Lorentzian) 피크 하나
+- 대사체학: 피크 중심 → **어떤 대사체인지**, 높이(면적) → **얼마나 있는지**
+- 이 관계는 $X$의 변환으로 표현할 수 없음
+
+```{r}
+#| label: nmr-plot
+#| fig-cap: "1H-NMR 스펙트럼 구간 (0.95~1.55 ppm) — 피크 4개"
+#| fig-width: 8
+#| fig-height: 3.5
+nmr <- read.csv("data/nmr_spectrum.csv")
+x <- nmr$ppm; y <- nmr$intensity
+op <- par(mar = c(4, 4, 1, 1))
+plot(x, y, type = "l", col = "grey30", xlim = rev(range(x)),
+     xlab = "Chemical shift (ppm)", ylab = "Intensity")
+par(op)
+```
+
+- NMR은 관례상 ppm을 **오른쪽에서 왼쪽으로** 그림
+
+```{r}
+#| label: nmr-poly
+## 변환으로 버텨 보기: 10차 다항식
+pm <- lm(y ~ poly(x, 10))
+c(R2 = summary(pm)$r.squared, RSS = sum(resid(pm)^2))
+```
+
+- 10차 다항식도 $R^2 = 0.24$ — 뾰족한 피크를 다항식으로는 못 따라감
+- **구조를 알면 그 구조를 모형에 넣어야 함**
+
+### 3.3 비선형 회귀
+
+- **Data**: $\{(x_{11}, \dots, x_{1p}), Y_1\}, \dots, \{(x_{n1}, \dots, x_{np}), Y_n\}$
+- **Model**
+
+$$Y_i = f(x_{i1}, \dots, x_{ip} \mid \boldsymbol\theta) + \epsilon_i,
+\qquad i = 1, \dots, n$$
+
+- $f$는 모수 벡터 $\boldsymbol\theta$만 빼고 **알려져 있음**
+- **Estimation** — 여전히 최소제곱
+
+$$\hat{\boldsymbol\theta} = \arg\min_{\boldsymbol\theta}
+\sum_{i=1}^{n}\bigl(Y_i - f(x_{i1}, \dots, x_{ip} \mid \boldsymbol\theta)\bigr)^2$$
+
+- $f$가 $\boldsymbol\theta$에 대해 선형이 아니므로 → 수치 알고리즘 (Gauss–Newton)
+- 시작값이 필요 — 여기서는 **피크 찾기**로 정함
+
+```{r}
+#| label: nmr-nls
+## 시작값: 이동평균 후 국소 최댓값
+sm <- stats::filter(y, rep(1 / 5, 5))
+pk <- which(diff(sign(diff(sm))) == -2) + 1
+pk <- pk[sm[pk] > 0.2]
+rbind(ppm = x[pk], height = y[pk])
+
+lor4 <- function(x, A1, A2, A3, A4, m1, m2, m3, m4, tau) {
+  A <- c(A1, A2, A3, A4); m <- c(m1, m2, m3, m4)
+  rowSums(sapply(1:4, function(l) A[l] / ((x - m[l])^2 / tau^2 + 1)))
+}
+st <- c(as.list(setNames(y[pk], paste0("A", 1:4))),
+        as.list(setNames(x[pk], paste0("m", 1:4))), tau = 0.01)
+fit <- nls(y ~ lor4(x, A1, A2, A3, A4, m1, m2, m3, m4, tau),
+           start = st)
+truth <- c(0.60, 0.35, 1.00, 0.45, 1.04, 1.20, 1.33, 1.48, 0.006)
+round(cbind(summary(fit)$coef[, 1:2], truth = truth), 5)
+c(RSS_nls = sum(resid(fit)^2), RSS_poly10 = sum(resid(pm)^2))
+```
+
+| 모수 | 추정치 | 표준오차 | 참값 |
+|---|---|---|---|
+| $A_1$ valine | 0.602 | 0.007 | 0.60 |
+| $A_2$ 3HB | 0.344 | 0.007 | 0.35 |
+| $A_3$ lactate | 0.997 | 0.008 | 1.00 |
+| $A_4$ alanine | 0.450 | 0.007 | 0.45 |
+| $\mu_1 \sim \mu_4$ | 1.0399 / 1.2000 / 1.3300 / 1.4800 | $\le 0.00016$ | 1.04 / 1.20 / 1.33 / 1.48 |
+| $\tau$ | 0.00606 | 0.00006 | 0.006 |
+
+- 9개 모수 모두 참값을 표준오차 2배 안에서 복원
+- 잔차 제곱합 0.103 — 10차 다항식(6.65)의 1/65
+
+```{r}
+#| label: nmr-fit-plot
+#| fig-cap: "비선형 회귀 적합(빨강)과 10차 다항식(파랑 점선)"
+#| fig-width: 8
+#| fig-height: 3.5
+op <- par(mar = c(4, 4, 1, 1))
+plot(x, y, type = "l", col = "grey60", xlim = rev(range(x)),
+     xlab = "Chemical shift (ppm)", ylab = "Intensity")
+lines(x, fitted(fit), col = "#c44e52", lwd = 2)
+lines(x, fitted(pm), col = "#4c72b0", lwd = 2, lty = 2)
+par(op)
+```
+
+### 3.4 비선형 vs. 선형
+
+| | 선형회귀 | 비선형회귀 |
+|---|---|---|
+| 회귀함수 | 모수에 대해 선형 | 모수에 대해 비선형 |
+| 추정 | 최소제곱 (닫힌 해) | 최소제곱 (**닫힌 해 없음**, 수치 알고리즘) |
+| 오차 가정 | 같음 | 같음 |
+| 적합도 평가 | 같은 방식 | 같은 방식 |
+| R | `lm()` | `nls()` — 시작값 필요, 더 까다로움 |
+
+- "선형"은 **모수에 대해** 선형이라는 뜻 — $x$에 대해서가 아님
+- 피크 중심 $\mu_l$과 폭 $\tau$를 **안다면** 모형은 $A_l$에 대해 선형 → `lm()`으로 풀림
+
+```{r}
+#| label: nmr-linear
+## mu, tau를 알 때: 로렌츠 기저 4개에 대한 선형회귀
+Bm <- sapply(c(1.04, 1.20, 1.33, 1.48),
+             function(m) 1 / ((x - m)^2 / 0.006^2 + 1))
+colnames(Bm) <- paste0("A", 1:4)
+round(coef(lm(y ~ 0 + Bm)), 4)
+```
+
+- 실제 대사체 정량 도구(`BATMAN`, `rDolphin`)도 이 구조
+  - 대사체별 피크 위치는 **데이터베이스**(HMDB)에서 가져와 거의 고정
+  - 위치의 작은 이동과 폭만 비선형으로 조정
+
+```{r}
+#| label: nmr-bad-start
+## 시작값이 나쁘면
+try_fit <- function(m0, tau0 = 0.01) {
+  s0 <- list(A1 = 0.5, A2 = 0.5, A3 = 0.5, A4 = 0.5, m1 = m0[1],
+             m2 = m0[2], m3 = m0[3], m4 = m0[4], tau = tau0)
+  r <- try(nls(y ~ lor4(x, A1, A2, A3, A4, m1, m2, m3, m4, tau),
+               start = s0), silent = TRUE)
+  if (inherits(r, "try-error")) conditionMessage(attr(r, "condition"))
+  else c(round(coef(r), 4), RSS = round(sum(resid(r)^2), 3))
+}
+try_fit(c(1.00, 1.15, 1.30, 1.45))     # 등간격 추측
+try_fit(c(1.05, 1.10, 1.35, 1.40))     # 두 피크를 잘못 짚음
+```
+
+- 등간격 시작값 → **수렴 실패** (step factor)
+- 두 피크를 잘못 짚으면 → **수렴은 하지만 틀린 답** (국소해)
+  - $A_2, A_4 \approx 0.01$ — 3HB와 alanine을 통째로 놓침, RSS도 훨씬 큼
+- 비선형 회귀의 실제 어려움: **목적함수가 볼록이 아님** → 시작값 의존
+
+### 3.5 비모수 회귀와 차원의 저주
+
+- 관계의 구조조차 모를 때 → $f$에 모수 구조를 두지 않음
+
+$$Y_i = f(x_{i1}, \dots, x_{ip}) + \epsilon_i,
+\qquad f \text{ unknown}$$
+
+- $p$가 커지면 가능한 $f$가 폭발적으로 많아짐 → **차원의 저주 (curse of dimensionality)**
+  - 같은 정확도를 유지하려면 표본크기가 차원 $p$에 대해 **지수적으로** 증가해야 함
+  - 원자료: $p = 1, n = 300$과 같은 정확도를 $p = 5$에서 얻으려면 $n \approx 30000$
+
+```{r}
+#| label: curse
+## 두 번 미분가능한 f의 최적 수렴속도 n^{-4/(4+p)} 에서
+## 같은 정확도: n_p^{-4/(4+p)} = 300^{-4/5}  ->  n_p = 300^{(4+p)/5}
+p <- 1:6
+round(300^((4 + p) / 5))
+
+## 자료의 10%를 담는 이웃의 한 변 길이 (단위 초입방체)
+round(0.1^(1 / c(1, 2, 5, 10)), 3)
+```
+
+- 원자료의 "30000"은 $300^{9/5} = 28{,}762$ — 비모수 추정의 수렴속도에서 나온 수
+- $p = 5$에서 자료 10%를 담으려면 각 축 범위의 **63%** 를 덮어야 함 → 더 이상 "국소적"이지 않음
+- GWAS·오믹스는 $p$가 수천~수백만 → 완전 비모수는 불가능
+
+### 3.6 일반화가법모형 (GAM)
+
+#### 모형
+
+- 절충: 변수 사이의 상호작용을 끊고, **변수 하나씩의 비모수 함수의 합**으로
+
+$$f(x_1, \dots, x_p) = \alpha + f_1(x_1) + \cdots + f_p(x_p)$$
+
+- $f_1, \dots, f_p$ — 모르지만 **매끄러운(smooth)** 함수
+  - 매끄럽다 = 설명변수가 조금 변할 때 함수값도 조금만 변함
+- 비모수 추정이 1차원 문제 $p$개로 쪼개짐 → 차원의 저주 회피
+- 정규뿐 아니라 이항·포아송 등 지수족 반응에도 적용 → 이 강의 모든 모형의 일반화
+
+#### Backfitting 알고리즘
+
+1. 초기화: $\hat\alpha,\ \hat f_1, \dots, \hat f_p$
+2. 수렴할 때까지 $j = 1, \dots, p$에 대해 반복
+3. 부분잔차를 만들고 그것을 $x_j$ 하나에 비모수회귀 → $\hat f_j$ 갱신
+
+$$\check R_i = Y_i - \hat\alpha - \sum_{k \ne j}\hat f_k(x_{ki}),
+\qquad \hat f_j \leftarrow \text{smooth}(\check R_i \sim x_{ji})$$
+
+- 한 번에 함수 하나만, 나머지는 고정 — 좌표하강(5-III의 lassosum)과 같은 발상
+- 적합이 더 이상 개선되지 않을 때까지
+
+#### mgcv::gam 실습
+
+- KNU-Methyl의 두 번째 CpG `cgB` — 나이와 BMI에 **비선형** (참값은 앞의 자료 소개 참고)
+- 비율 자료이므로 1절의 coverage 가중치를 그대로 씀 → **가중 GAM**
+
+```{r}
+#| label: gam-fit
+me$yB <- me$meth_B / me$cov_B
+lin <- lm(yB ~ age + bmi + sex, data = me, weights = cov_B)
+gm  <- gam(yB ~ s(age) + s(bmi) + sex, data = me,
+           weights = cov_B, method = "REML")
+summary(gm)$s.table
+round(summary(gm)$p.table, 5)
+c(AIC_linear = AIC(lin), AIC_gam = AIC(gm))
+anova(lin, gm, test = "F")
+```
+
+- 평활항의 유효자유도(edf): 나이 4.52, BMI 3.96 — 직선(edf = 1)이 아님
+- 성별(선형항) 0.0226 (참 0.02)
+- AIC −711 → −809, F-검정 p < $10^{-15}$ — 비선형 항이 확실히 필요
+
+```{r}
+#| label: backfit
+## 공식 직접 계산: smooth.spline으로 가중 backfitting
+yb <- me$yB; w <- me$cov_B
+al <- weighted.mean(yb, w); f1 <- f2 <- rep(0, nrow(me)); bs <- 0
+for (it in 1:100) {
+  old <- cbind(f1, f2)
+  s1 <- smooth.spline(me$age, yb - al - f2 - bs * me$sex, w = w, df = 5)
+  f1 <- predict(s1, me$age)$y;  f1 <- f1 - mean(f1)
+  s2 <- smooth.spline(me$bmi, yb - al - f1 - bs * me$sex, w = w, df = 5)
+  f2 <- predict(s2, me$bmi)$y;  f2 <- f2 - mean(f2)
+  bs <- coef(lm(I(yb - f1 - f2) ~ me$sex, weights = w))[[2]]
+  al <- weighted.mean(yb - f1 - f2 - bs * me$sex, w)
+  if (max(abs(cbind(f1, f2) - old)) < 1e-8) break
+}
+pt <- predict(gm, type = "terms")
+c(iterations = it, sex_backfit = bs,
+  cor_age = cor(f1, pt[, "s(age)"]), cor_bmi = cor(f2, pt[, "s(bmi)"]),
+  maxdiff_age = max(abs(f1 - pt[, "s(age)"])),
+  maxdiff_bmi = max(abs(f2 - pt[, "s(bmi)"])))
+```
+
+- 8회 반복으로 수렴
+- `mgcv::gam`과 평활항 상관 **0.9999**, 최대 차이 0.004 (나이), 0.002 (BMI)
+  - 완전히 같지는 않음: `smooth.spline`은 자유도 5로 고정, `mgcv`는 REML로 매끄러움을 자동 선택
+  - `mgcv`는 backfitting 대신 **벌점 회귀스플라인을 한 번에** 푸는 방식 — 결과는 같은 모형
+
+```{r}
+#| label: gam-plot
+#| fig-cap: "GAM 평활항 추정(파랑)과 backfitting(주황 점선) vs 참 함수(검정) — 둘 다 중심화"
+#| fig-width: 8
+#| fig-height: 4
+f_age <- function(a) 0.18 * tanh((a - 40) / 15)
+f_bmi <- function(b) 0.10 / (1 + exp(-(b - 27) / 1.5))
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+for (v in c("age", "bmi")) {
+  xv <- me[[v]]; o <- order(xv)
+  tf <- if (v == "age") f_age(xv) else f_bmi(xv)
+  est <- pt[, paste0("s(", v, ")")]
+  bf  <- if (v == "age") f1 else f2
+  plot(xv[o], (tf - mean(tf))[o], type = "l", lwd = 2,
+       xlab = v, ylab = paste0("f(", v, ")"),
+       ylim = range(c(tf - mean(tf), est)))
+  lines(xv[o], est[o], col = "#4c72b0", lwd = 2)
+  lines(xv[o], bf[o], col = "#dd8452", lwd = 2, lty = 2)
+}
+par(op)
+```
+
+- 나이: 40세 전후로 가파르게 오르다 포화 — `tanh` 모양을 그대로 복원
+- BMI: 27 부근의 문턱 — 선형 모형은 이것을 완만한 직선으로 뭉갬
+- 양 끝(BMI 18 미만, 30 초과)은 자료가 드물어 참 함수에서 벗어남 → 평활항은 **자료가 많은 구간에서만** 믿을 것
+- **변환 형태를 지정하지 않고** 자료가 정하게 함 (4-V의 G0061과 같은 도구)
+
+| | 선형회귀 | 비모수 (GAM) |
+|---|---|---|
+| 추정 | 최소제곱 | 최소제곱 (+ 매끄러움 벌점), 닫힌 해 없음 |
+| $X$와 $Y$의 관계 | 선형으로 가정 | **모름** — 자료에서 추정 |
+| 알고리즘 | $(\mathbf X^\top\mathbf X)^{-1}\mathbf X^\top\mathbf Y$ | backfitting / 벌점 회귀스플라인 |
+| R | `lm()` | `mgcv::gam()`, `gam::gam()` |
+
+::: {.callout-warning}
+## GAM을 쓸 때
+- 비모수 평활에 대한 이해가 필요한 고급 모형 — 매끄러움 정도(edf)의 선택이 결과를 좌우
+- 가법성 가정: 나이 효과가 BMI에 따라 달라지면(상호작용) 못 잡음 → `te(age, bmi)`
+- 평활항은 해석이 그림으로만 가능 — 계수 하나로 요약되지 않음
+:::
+
+::: {.callout-note}
+## Part 6-I 정리
+
+| 깨진 가정 | 증상 | 대응 | 이 장의 예 |
+|---|---|---|---|
+| 등분산 | 깔때기 모양 잔차 | 분산안정화 변환 / **WLS** | 메틸화 coverage, voom |
+| 정규성 (이상치 다수) | 두꺼운 꼬리 QQ | **로버스트 회귀** (LAD, Huber) | LDLR eQTL |
+| 선형성 (구조 앎) | 체계적 잔차 패턴 | **비선형 회귀** (`nls`) | NMR 피크 |
+| 선형성 (구조 모름) | 체계적 잔차 패턴 | **GAM** (`mgcv::gam`) | 메틸화 ~ 나이·BMI |
+
+- 다음 6-II는 마지막 남은 가정 — **독립성**이 깨질 때 (시간·공간·군집)
+:::

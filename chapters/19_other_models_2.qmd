@@ -1,0 +1,1001 @@
+---
+title: "6-II. Other Regression Models (2): Time Series, Spatial, Mixed Effects"
+description: "상관된 오차를 다루는 세 가지 확장 — 연속혈당(CGM), Visium 공간전사체, 가계 코호트 LMM — 그리고 전체 정리"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="6-II. 기타 회귀모형 (2): 시계열, 공간, 혼합효과">
+        <meta name="ai-context" content="
+        이 챕터는 오차의 독립성(무상관) 가정이 깨지는 세 가지 상황과 강의 전체 정리를 다룹니다.
+        상관을 무시하면 유효 자유도가 표본크기보다 작은데도 크게 계산되어 신뢰구간이 너무 좁아집니다.
+        시계열 예제는 연속혈당측정(CGM) 14일, 15분 간격 1344점입니다.
+        추세(하루 -1.2 mg/dL), 불규칙 순환(감기), 하루 주기 계절성(식후 반응), 이분산(식후 변동 증가), 자기상관(AR(1), phi 0.8)이 모두 있습니다.
+        Y_t = m_t + s_t + X_t 로 분해하며 R의 decompose()는 중심이동평균과 시각별 평균을 직접 계산한 것과 일치합니다.
+        추세 기울기를 OLS로 추정하면 -1.03, 표준오차 0.083으로 95% CI가 참값 -1.2를 벗어나고,
+        AR(1) 오차의 GLS는 -1.05, 표준오차 0.260(3.2배)으로 참값을 포함합니다. 1344점의 유효 표본크기는 약 149입니다.
+        Prais-Winsten 변환 후 OLS가 gls()와 같은 계수를 줍니다.
+        공간 예제는 Visium 유사 공간전사체 600 spot입니다. 피질 깊이에 따른 추세, 매끄러운 공간장, 백질의 큰 분산이 있습니다.
+        깊이 계수는 OLS 0.122(se 0.0042)로 참값 0.10을 벗어나고, 지수 공분산 GLS는 0.125(se 0.0142)로 포함합니다.
+        OLS 잔차의 Moran's I는 0.41입니다. Moran's I로 50개 유전자를 스캔하면 공간변이 유전자 10개를 모두 찾고 위양성은 0입니다.
+        혼합효과 예제는 KNU-Family 300가계 x 5명(부모+자녀 3)입니다. 참 유전율은 0.5입니다.
+        가계를 임의효과로 두면 ANOVA 추정량 (MSA-MSE)/5 가 REML과 정확히 같습니다.
+        혈연행렬 K(부모-자녀·형제 0.5, 배우자 0)를 쓰는 LMM y = Xb + g + e, g ~ N(0, s2g K)는
+        K를 고유분해해 자료를 회전하면 가중치 1/(s2g*lambda + s2e)인 WLS가 됩니다(GEMMA·FaST-LMM의 방법).
+        REML로 추정한 유전율은 0.46입니다. 귀무 SNP 1000개를 OLS로 검정하면 lambda_GC 1.52로 팽창하고,
+        혈연 LMM으로 검정하면 1.07로 교정됩니다.
+        마지막으로 단순회귀부터 GAM·혼합효과까지 모든 모형을 자료·가정·추정법 기준으로 정리합니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `6-II. (others) time series, spatial, mixed effect.docx`
+- 원자료의 예제를 생물학 자료로 교체
+
+| 원자료 | 이 장 |
+|---|---|
+| GDP, IBM 주가, S&P500 | 연속혈당측정(CGM) 14일 |
+| 응급실 이용률 지도, fMRI | Visium 유사 공간전사체 |
+| 혈압약 반복측정, 의료기관 | KNU-Family 가계 코호트 (혈연 LMM) |
+
+- 데이터: `data/cgm_glucose.csv`, `data/visium_spots.csv`, `data/visium_truth.csv`,
+  `data/family_cohort.csv`, `data/family_geno.csv.gz`
+- 생성 스크립트: `data-raw/simulate_part6_2.R` (`set.seed(20260922)`)
+:::
+
+::: {.callout-important collapse="true"}
+## 이 장의 실습 자료 — 참값
+
+| 자료 | 크기 | 생성 모형 |
+|---|---|---|
+| `cgm_glucose.csv` | 14일 × 96점 = 1344 | 추세 + 순환 + 하루 주기 + AR(1) |
+| `visium_spots.csv` | 600 spot × 50 유전자 | 깊이 추세 + 가우스 공간장 + 잡음 |
+| `family_cohort.csv` | 300가계 × 5명 = 1500 | 공변량 + `snp_LDLR` + 다유전자 배경 + 잡음 |
+| `family_geno.csv.gz` | 1500 × 1000 | 멘델 전달된 귀무 SNP |
+
+- CGM (15분 간격, 단위 mg/dL)
+  - 추세 $m_t = 150 - 1.2\,t$ ($t$ = 일)
+  - 순환: 6~8일째 감기, 7일째 +14 정점 — 주기 없음
+  - 계절성: 새벽 현상 + 식후 반응 3회 (시각 ±0.4시간, 크기 ±20%가 매일 다름, 주말 1.3배)
+  - 정상 성분: AR(1), $\phi = 0.8$, 혁신 SD $3(1 + \text{식후반응}/30)$ + 센서 잡음 SD 2
+- Visium (육각 격자, spot 간격 1)
+  - `g01` $= 1.5 + 0.10\,\text{depth} + \omega(s) + \varepsilon$,
+    $\omega \sim GP(\sigma^2 = 0.30,\ \rho = 3)$, $\varepsilon$ SD 회색질 0.35 / 백질 0.6
+  - `g02`~`g10` 공간변이 유전자(SVG), `g11`~`g50` 공간 패턴 없음 — `visium_truth.csv`
+- KNU-Family
+  - $\text{ldl} = 2.55 + 0.28\,\text{snp} + 0.013(\text{age}-55) + 0.33\,\text{sex} + 0.042(\text{bmi}-24) + g + e$
+  - $\mathbf g \sim N(\mathbf 0, \sigma_g^2\mathbf K)$, $\sigma_g^2 = \sigma_e^2 = 0.19$ → $h^2 = 0.5$
+  - 공변량 계수는 KNU-Lipid(3-III)와 같음
+:::
+
+```{r}
+#| label: setup
+#| include: false
+suppressMessages({
+  library(nlme); library(mgcv)
+})
+```
+
+## 1. Time Series Regression
+
+### 1.1 독립성 가정이 깨질 때 — 상관된 오차
+
+- **Independence**: $\epsilon_1, \dots, \epsilon_n$ 서로 독립
+  - 실제로 따지는 것은 대개 **무상관** 여부 — 독립성은 실험설계에서만 보장됨
+- 상관이 있으면
+  - 자유도 $\ne$ 표본크기 — 상관 때문에 **실제 자유도가 더 작음**
+  - 추정의 변동성·불확실성이 커짐
+  - 그런데 독립을 가정한 계산은 이것을 반영 못 함 → **덜 믿을 만한 추론**
+- 가장 고전적인 상관 = **시간에 따른 상관**
+  - 경제·금융·기후·**의료**(환자 모니터링) 등 어디서나
+  - 시간 해상도(연·월·일·분·초)는 목적과 측정 자원에 따라 정함
+
+### 1.2 시계열 자료의 특징
+
+#### Trend
+
+- 시간에 따른 **장기적** 증가·감소 (또는 크게 요동)
+
+#### Seasonality
+
+- 계절 요인의 영향 — 분기, 월, 요일, **하루 중 시각**
+
+#### Periodicity
+
+- 계절성이 **같은 시각에 같은 모양으로 정확히** 반복되면 주기성
+- 계절 시계열을 흔히 주기적이라 부르지만 정확히 반복되지는 않음
+
+#### Cyclical trend
+
+- 오르내림이 있으나 **기간이 일정하지 않음**
+
+#### Heteroskedasticity
+
+- 시간에 따라 **변동성**이 달라짐
+
+#### Correlation
+
+- 양의 상관 — 이웃한 관측치가 비슷함
+- 음의 상관 — 이웃한 관측치가 서로 다름
+
+### 1.3 예제 — 연속혈당측정 (CGM)
+
+- 원자료의 예: 미국 GDP(추세만), IBM 주가(추세 + 이분산), S&P500 분 단위 수익률
+- 원자료가 언급한 **환자 모니터링**(심전도 등)이 의료의 대표 시계열
+- CGM: 피하 센서가 15분(또는 5분)마다 간질액 포도당을 측정 → 2주 연속
+
+```{r}
+#| label: cgm-load
+cg <- read.csv("data/cgm_glucose.csv")
+dim(cg)
+head(cg[, c("t", "day", "hour", "weekend", "glucose")], 3)
+summary(cg$glucose)
+```
+
+```{r}
+#| label: cgm-plot
+#| fig-cap: "14일 CGM (위, 회색 띠 = 주말)과 첫 이틀 확대 (아래)"
+#| fig-width: 9
+#| fig-height: 6
+op <- par(mfrow = c(2, 1), mar = c(4, 4, 1, 1))
+plot(cg$day, cg$glucose, type = "n", xlab = "Day",
+     ylab = "Glucose (mg/dL)")
+for (d in c(5, 12)) rect(d, 0, d + 2, 400, col = "grey92", border = NA)
+lines(cg$day, cg$glucose, col = "#4c72b0")
+lines(cg$day, cg$true_trend, col = "#c44e52", lwd = 2, lty = 2)
+z <- cg$day < 2
+plot(cg$hour[z] + 24 * (cg$dayn[z] - 1), cg$glucose[z], type = "l",
+     col = "#4c72b0", lwd = 2, xlab = "Hour", ylab = "Glucose (mg/dL)",
+     xaxt = "n")
+axis(1, at = seq(0, 48, 6))
+abline(v = c(7.5, 12.5, 18.5, 31.5, 36.5, 42.5), lty = 3, col = "grey50")
+par(op)
+```
+
+| 특징 | CGM에서 보이는 모습 |
+|---|---|
+| Trend | 식이 조절 후 2주간 서서히 감소 (빨간 점선) |
+| Seasonality | 하루 주기 — 새벽 현상, 아침·점심·저녁 식후 상승 |
+| Periodicity | 거의 주기적이나 식사 시각·양이 매일 달라 **정확히 반복되지는 않음** |
+| Cyclical trend | 6~8일째 감기로 인한 상승 — 한 번뿐, 주기 없음 |
+| Heteroskedasticity | 식후 구간의 변동이 공복 구간보다 큼, 주말 식후 반응이 큼 |
+| Correlation | 15분 간격의 이웃 측정값이 매우 비슷함 (강한 양의 상관) |
+
+### 1.4 꼭 필요할까
+
+- 시계열 = **의존적** 자료
+  - 정보가 중복됨 → 자유도 < 관측치 수
+  - 자료가 확률공간의 좁은 부분에 몰림
+- 의존성을 무시하면
+  - 회귀모수 추정이 비효율적, 예측이 나빠짐
+  - **표준오차가 비현실적으로 작음** → 너무 좁은 CI → 부적절한 추론
+- AR(1) 오차에서 평균의 **유효 표본크기**
+
+$$n_{\text{eff}} = n\,\frac{1 - \phi}{1 + \phi},
+\qquad
+\frac{se_{\text{true}}}{se_{\text{iid}}} \approx \sqrt{\frac{1 + \phi}{1 - \phi}}$$
+
+```{r}
+#| label: n-eff
+phi <- 0.8; n <- nrow(cg)
+c(n = n, n_eff = n * (1 - phi) / (1 + phi),
+  se_ratio = sqrt((1 + phi) / (1 - phi)))
+```
+
+- CGM 1344점이 평균 추정에서는 **약 149개의 독립 관측치**와 같은 정보량
+- 독립을 가정하면 표준오차를 약 **1/3로 과소평가**
+
+### 1.5 기본 모형과 추정
+
+- **Data**: $Y_t$ — 시간 $t$(분·시·일·월 …)에 대해 기록된 반응
+- **Model**
+
+$$Y_t = m_t + s_t + X_t$$
+
+| 성분 | 의미 | 조건 |
+|---|---|---|
+| $m_t$ | 추세 (trend) | — |
+| $s_t$ | 계절 성분, 주기 $d$가 알려짐 | $s_t = s_{t+d}$, $\sum_{j=1}^{d} s_j = 0$ |
+| $X_t$ | 정상(stationary) 성분 | 시간을 옮겨도 확률분포가 변하지 않음 |
+
+- $X_t$에는 별도의 오차항이 없음 — $X_t$ 자체가 확률과정
+- **Estimation**
+  1. $m_t$, $s_t$를 먼저 추정
+  2. $\hat X_t = Y_t - \hat m_t - \hat s_t$ — 시간에 무관한 부분만 남김
+  3. $\hat X_t$를 시계열 모형(AR, ARMA 등)으로 모형화
+- 고전적 시계열 모형은 대부분 정상성을 가정 → 추세·계절을 먼저 빼야 하는 이유
+- CGM: $d = 96$ (15분 × 96 = 24시간)
+
+#### 고전적 분해
+
+- $\hat m_t$ — 길이 $d$의 **중심이동평균** ($d$가 짝수면 양 끝에 1/2 가중)
+- $\hat s_j$ — $Y_t - \hat m_t$를 **같은 시각끼리 평균** 후 합이 0이 되게 중심화
+
+```{r}
+#| label: decompose
+#| fig-cap: "CGM의 고전적 분해 — 관측값, 추세(+순환), 하루 주기 계절 성분, 나머지"
+#| fig-width: 9
+#| fig-height: 7
+yt <- ts(cg$glucose, frequency = 96)
+dc <- decompose(yt)
+plot(dc, col = "#4c72b0")
+```
+
+```{r}
+#| label: decompose-manual
+## 공식 직접 계산: 중심이동평균 + 시각별 평균 → decompose()와 비교
+d  <- 96
+fw <- c(0.5, rep(1, d - 1), 0.5) / d          # 짝수 주기 중심이동평균
+m_hat <- as.numeric(stats::filter(cg$glucose, fw, sides = 2))
+dt <- cg$glucose - m_hat
+s_j <- tapply(dt, (seq_along(dt) - 1) %% d, mean, na.rm = TRUE)
+s_j <- s_j - mean(s_j)                        # 합 = 0
+s_hat <- rep(s_j, length.out = length(dt))
+X_hat <- cg$glucose - m_hat - s_hat
+c(trend = max(abs(m_hat - as.numeric(dc$trend)), na.rm = TRUE),
+  seasonal = max(abs(s_hat - as.numeric(dc$seasonal))),
+  random = max(abs(X_hat - as.numeric(dc$random)), na.rm = TRUE))
+```
+
+```{r}
+#| label: decompose-truth
+## 추정 성분 vs 참 성분
+s_true <- tapply(cg$true_season, cg$t %% d, mean)
+c(cor_trend = cor(m_hat, cg$true_trend + cg$true_cycle,
+                  use = "complete.obs"),
+  cor_season = cor(s_j, s_true - mean(s_true)))
+```
+
+- `decompose()`는 위 두 줄의 공식 그대로 — 기계 정밀도에서 일치
+- $\hat m_t$는 추세와 감기 순환을 **함께** 담음 (참 추세+순환과 상관 0.91)
+  - 고전적 분해는 추세와 순환을 구분하지 못함 → 흔히 "trend-cycle"이라 부름
+- $\hat s_t$는 참 하루 평균 패턴과 상관 0.99
+
+```{r}
+#| label: acf
+#| fig-cap: "나머지 성분의 자기상관함수 — 지수적으로 감소하는 AR(1) 모양"
+#| fig-width: 6
+#| fig-height: 4
+Xr <- na.omit(as.numeric(dc$random))
+acf(Xr, lag.max = 24, main = "", col = "#4c72b0", lwd = 3)
+ar1 <- arima(Xr, order = c(1, 0, 0))
+c(acf_lag1 = acf(Xr, plot = FALSE)$acf[2], phi_hat = coef(ar1)[["ar1"]],
+  phi_true = 0.8)
+```
+
+- 정상 성분 $\hat X_t$의 1시차 자기상관 0.78, AR(1) 추정 $\hat\phi = 0.78$ (참 0.8)
+
+#### 회귀 — 추세 기울기의 추론
+
+- 질문: 식이 조절 후 **하루에 얼마씩** 혈당이 떨어지는가 (참 −1.2 mg/dL/일)
+- 모형: 시각별 계절 더미 + 선형 추세
+
+$$Y_t = \beta_0 + \beta_1\,\text{day}_t + s_{j(t)} + \epsilon_t,
+\qquad \epsilon_t = \phi\,\epsilon_{t-1} + u_t$$
+
+```{r}
+#| label: trend-ols-gls
+cg$slot <- factor(cg$t %% d)
+ols <- lm(glucose ~ day + slot, data = cg)
+gl  <- gls(glucose ~ day + slot, data = cg,
+           correlation = corAR1(), method = "REML")
+phi_g <- coef(gl$modelStruct$corStruct, unconstrained = FALSE)
+tab <- rbind(OLS = c(summary(ols)$coef["day", 1:2], confint(ols)["day", ]),
+             GLS = c(summary(gl)$tTable["day", 1:2], confint(gl)["day", ]))
+round(cbind(tab, truth = -1.2), 4)
+c(phi_hat = phi_g[[1]],
+  se_ratio = tab["GLS", 2] / tab["OLS", 2])
+```
+
+| | 기울기 | 표준오차 | 95% CI | 참값 포함 |
+|---|---|---|---|---|
+| OLS (독립 가정) | −1.034 | 0.083 | (−1.196, −0.872) | **✗** |
+| GLS (AR(1) 오차) | −1.055 | 0.260 | (−1.565, −0.544) | ✓ |
+
+- 점추정은 비슷함 — 둘 다 불편
+- OLS 표준오차가 **3.2배 작음** → 1.4의 공식에 $\hat\phi = 0.82$를 넣은 $\sqrt{1.82/0.18} = 3.2$와 일치
+- OLS의 CI는 참값 −1.2를 벗어남 — "너무 좁은 CI"의 실제 모습
+
+```{r}
+#| label: prais-winsten
+## 공식 직접 계산: Prais-Winsten 변환 후 OLS = GLS
+pw <- function(z, phi) {
+  c(sqrt(1 - phi^2) * z[1], z[-1] - phi * z[-length(z)])
+}
+Xd <- model.matrix(~ day + slot, data = cg)
+Xs <- apply(Xd, 2, pw, phi = phi_g)
+ys <- pw(cg$glucose, phi_g)
+b_pw <- qr.coef(qr(Xs), ys)
+c(beta_day_PW = b_pw[["day"]], beta_day_gls = coef(gl)[["day"]],
+  max_abs_diff = max(abs(b_pw - coef(gl))))
+```
+
+- $\epsilon_t - \phi\epsilon_{t-1} = u_t$가 독립 → 자료에 같은 변환을 하면 OLS 가능
+- 1.4절(WLS)의 "$\boldsymbol\Sigma^{-1/2}$로 탈상관 후 OLS"가 시계열에서는 이 변환
+
+```{r}
+#| label: false-positive-mc
+## 추세가 없는 자료를 500번 생성: 기울기 검정의 1종 오류율
+set.seed(2)
+tstat <- function(X, y) {
+  q <- qr(X); r <- qr.resid(q, y)
+  s2 <- sum(r^2) / (nrow(X) - ncol(X))
+  qr.coef(q, y)[2] / sqrt(s2 * chol2inv(qr.R(q))[2, 2])
+}
+rej <- t(replicate(500, {
+  e <- as.numeric(arima.sim(list(ar = 0.8), n, sd = 3))
+  y0 <- s_hat + e                                # 참 기울기 0
+  t_o <- tstat(Xd, y0)
+  r <- qr.resid(qr(Xd), y0)
+  ph <- sum(r[-1] * r[-n]) / sum(r^2)            # 잔차 1시차 상관
+  t_g <- tstat(apply(Xd, 2, pw, phi = ph), pw(y0, ph))
+  c(OLS = abs(t_o) > 1.96, FGLS = abs(t_g) > 1.96)
+}))
+colMeans(rej)
+```
+
+- 명목 5% 검정인데 OLS는 **절반 이상**이 "유의한 추세"를 선언
+- 잔차로 $\phi$를 추정해 변환한 FGLS(Cochrane–Orcutt·Prais–Winsten)는 5% 근처
+
+```{r}
+#| label: heteroskedasticity
+## GLS 정규화 잔차의 SD: 식후 반응 구간(참 식후 상승 > 5) vs 그 밖
+ph_meal <- cg$true_season - 8 * exp(-((cg$hour - 6) / 1.5)^2) > 5
+rn <- resid(gl, type = "normalized")
+round(tapply(rn, ifelse(ph_meal, "postprandial", "other"), sd), 3)
+```
+
+- 정규화 잔차 SD: 식후 1.13 vs 그 밖 0.71 → 식후 변동이 1.6배, 등분산도 깨짐
+- 대응: 분산함수를 함께 모형화 (`gls(weights = varIdent(...))`) — 1장 WLS의 확장
+
+::: {.callout-tip}
+## 실제 CGM 분석에서는
+- 요약지표로 축약하는 것이 표준 — 평균 혈당, **TIR**(70~180 mg/dL 비율), 변동계수(CV)
+- 여러 환자의 곡선을 함께 다루면 → 시계열 + **혼합효과** (3절)
+- 시계열 분석은 그 자체로 한 과목 분량 — ARIMA, 상태공간모형, 함수형 자료분석
+:::
+
+## 2. Spatial Regression
+
+### 2.1 공간적으로 상관된 오차
+
+- 시계열과 같은 문제: 오차가 무상관이 아님 → 회귀의 강도를 잘못 평가
+- 이번에는 **공간에서의 상관** — 가까운 위치끼리 비슷함
+- 사회경제·보건·**뇌영상**·이미징·이동경로·산림·환경 등
+- 원자료의 예
+  - 지역별 1차 의료기관까지의 거리, 응급실 이용률 — 이웃 지역이 비슷함
+  - 감염병 발생 위치 (Zika), fMRI 뇌 활성, 들소의 이동 궤적
+
+### 2.2 공간 자료의 특징
+
+#### Trend
+
+- 공간에 따른 **장거리** 증가·감소
+
+#### Smoothness
+
+- 거리가 멀어질수록 **조금씩** 달라짐 — 가까우면 비슷함
+- 공간 과정에서 주기성·계절성은 드묾
+
+#### Heteroskedasticity
+
+- 공간에 따라 변동성이 다름 (예: 도시보다 농촌의 변동이 큼)
+
+- 그 밖의 고려사항
+
+| 구분 | 내용 | 예 |
+|---|---|---|
+| 연속 vs 이산 | 위치마다 수치 / 있다·없다 / 카운트 | 접근성 지표 vs 발병 위치(점과정) |
+| 정규 vs 불규칙 격자 | 격자(lattice) / 크기·모양이 제각각인 구역 | 영상 픽셀 vs 행정구역 |
+
+### 2.3 예제 — 공간전사체
+
+- 원자료의 예(응급실 이용 지도, fMRI)를 **공간전사체**로 교체
+- Visium: 조직 절편 위 **육각 격자**의 spot(지름 55 µm, 중심 간격 100 µm)마다 전사체 측정
+
+| 원자료 개념 | Visium |
+|---|---|
+| 위치 $s$ | spot 좌표 |
+| 격자 | **정규** 격자 (육각) — fMRI 복셀과 같은 부류 |
+| 반응 | 유전자 발현 (정규화 log 발현 → 연속) |
+| Trend | 피질 층(layer)에 따른 깊이 경사 |
+| Smoothness | 이웃 spot의 세포 구성이 비슷함 |
+| Heteroskedasticity | 백질·회색질의 세포 밀도 차이 |
+
+- 대비: MERFISH·Xenium은 세포·전사체 하나하나의 좌표 → **불규칙 격자, 점과정**
+
+```{r}
+#| label: vis-load
+vs <- read.csv("data/visium_spots.csv")
+vt <- read.csv("data/visium_truth.csv")
+dim(vs)
+table(vs$region)
+head(vt, 3)
+```
+
+```{r}
+#| label: vis-map
+#| fig-cap: "절편 위 g01 발현 (왼쪽)과 영역 (오른쪽) — 아래로 갈수록 깊음"
+#| fig-width: 9
+#| fig-height: 4.5
+pal <- function(z, k = 50) {
+  hcl.colors(k, "viridis")[cut(z, k, labels = FALSE)]
+}
+op <- par(mfrow = c(1, 2), mar = c(1, 1, 2, 1))
+plot(vs$x, -vs$y, col = pal(vs$g01), pch = 16, cex = 1.3, asp = 1,
+     axes = FALSE, xlab = "", ylab = "", main = "g01 expression")
+plot(vs$x, -vs$y, pch = 16, cex = 1.3, asp = 1, axes = FALSE,
+     col = ifelse(vs$region == "WM", "#dd8452", "#4c72b0"),
+     xlab = "", ylab = "", main = "Gray matter / White matter")
+par(op)
+```
+
+- 깊이 방향 경사(trend) 위에 **덩어리진 패턴**(smoothness)이 얹혀 있음
+
+```{r}
+#| label: vis-ols
+ols_s <- lm(g01 ~ depth, data = vs)
+summary(ols_s)$coef
+```
+
+#### 잔차의 공간상관 — Moran's I
+
+$$I = \frac{n}{S_0}\,
+\frac{\sum_i\sum_j w_{ij}(r_i - \bar r)(r_j - \bar r)}{\sum_i (r_i - \bar r)^2},
+\qquad S_0 = \sum_i\sum_j w_{ij}$$
+
+- $w_{ij} = 1$ — 이웃 spot (중심 거리 1), 아니면 0
+- 공간상관이 없으면 $E(I) = -1/(n-1) \approx 0$, 양의 공간상관이면 $I > 0$
+- 시계열의 1시차 자기상관을 공간으로 옮긴 것
+
+```{r}
+#| label: moran
+D <- as.matrix(dist(vs[, c("x", "y")]))
+Wn <- (D > 0 & D < 1.01) * 1                 # 육각 격자의 이웃 6개
+moran <- function(z, W) {
+  z <- z - mean(z); n <- length(z); S0 <- sum(W)
+  I  <- n / S0 * sum(W * outer(z, z)) / sum(z^2)
+  EI <- -1 / (n - 1)
+  S1 <- 0.5 * sum((W + t(W))^2)
+  S2 <- sum((rowSums(W) + colSums(W))^2)
+  VI <- (n^2 * S1 - n * S2 + 3 * S0^2) / ((n^2 - 1) * S0^2) - EI^2
+  c(I = I, z = (I - EI) / sqrt(VI), p = pnorm(-(I - EI) / sqrt(VI)))
+}
+table(rowSums(Wn))                           # 가장자리는 이웃이 적음
+moran(resid(ols_s), Wn)
+```
+
+- 깊이 추세를 뺀 잔차에도 $I = 0.41$ ($z = 17$) — **강한 양의 공간상관**
+- OLS의 독립 가정이 명백히 깨짐
+
+#### Smoothness — 준변동도 (semivariogram)
+
+$$\gamma(h) = \tfrac12\,E\bigl[(r(s) - r(s + h))^2\bigr]$$
+
+- 거리 $h$만큼 떨어진 두 점이 **얼마나 다른가**
+- 가까우면 작고, 멀어지면 커져 **문턱(sill)** 에 도달 → smoothness의 정량화
+
+```{r}
+#| label: variogram
+#| fig-cap: "OLS 잔차의 경험적 준변동도 — 거리가 멀수록 커지다 평평해짐"
+#| fig-width: 6
+#| fig-height: 4
+r  <- resid(ols_s)
+ut <- upper.tri(D)
+hb <- cut(D[ut], breaks = seq(0.5, 12.5, by = 1))   # 거리 1, 2, ..., 12
+gam_h <- tapply(0.5 * outer(r, r, "-")[ut]^2, hb, mean)
+plot(1:12, gam_h, pch = 19, col = "#4c72b0", ylim = c(0, max(gam_h)),
+     xlab = "Distance h (spot)", ylab = "Semivariance")
+abline(h = var(r), lty = 2, col = "grey50")          # 전체 분산
+round(gam_h, 3)
+```
+
+- 거리 1에서 0.24 → 거리 6 이상에서 0.42 부근으로 **평평해짐** (점선 = 전체 분산)
+- 가까울수록 비슷하다 = smoothness, 평평해지는 거리 = 공간상관이 미치는 범위
+- $h 	o 0$에서도 0이 아님 → 공간과 무관한 측정 잡음 (**nugget**)
+
+### 2.4 기본 모형과 추정
+
+- **Data**: $Y_s$ — $s$는 공간 색인 (복셀, 행정구역, **spot**)
+- **Model** — 고려할 것들
+
+| 구분 | 선택지 |
+|---|---|
+| 반응의 종류 | 수치 반응 vs **점과정** |
+| 정상성 | stationary — 공간에서 옮겨도 분포 불변 / non-stationary |
+| 등방성 | isotropic — 모든 방향에서 분포가 같음 |
+| 관측 격자 | $s \in S$, 정규 vs 불규칙 |
+| 의존의 규모 | 국소적(small-scale) vs 장거리(large-scale) |
+
+- 정상성·등방성은 공간 자료에 매우 **제약적인** 가정 → 고급 공간통계의 상당 부분이 이것을 완화하는 일
+- 가장 기본적인 연속 공간 모형 — **가우스 과정(GP) 회귀**
+
+$$Y(s) = \mathbf x(s)^\top\boldsymbol\beta + \omega(s) + \varepsilon(s),
+\qquad
+\text{Cov}\bigl(\omega(s), \omega(s')\bigr) = \sigma^2 e^{-\|s - s'\|/\rho}$$
+
+- $\omega$ — 매끄러운 공간장, $\rho$ — **범위(range)**, $\varepsilon$ — 독립 잡음 (nugget $\tau^2$)
+- 전체 공분산 $\boldsymbol\Sigma = \sigma^2\mathbf R(\rho) + \tau^2\mathbf I$ → 1장의 **WLS(GLS)** 그대로
+
+$$\hat{\boldsymbol\beta} = (\mathbf X^\top\boldsymbol\Sigma^{-1}\mathbf X)^{-1}\mathbf X^\top\boldsymbol\Sigma^{-1}\mathbf Y$$
+
+- $\sigma^2, \rho, \tau^2$는 최대가능도로 함께 추정
+
+```{r}
+#| label: gp-direct
+## 공식 직접 계산: 지수 공분산 GP 회귀의 프로파일 가능도 (ML)
+X <- model.matrix(ols_s); y <- vs$g01; n <- length(y)
+gp_fit <- function(par) {
+  rho <- exp(par[1]); nu <- exp(par[2])       # nu = tau2 / sigma2
+  R <- exp(-D / rho); diag(R) <- 1 + nu
+  L <- chol(R)
+  Xs <- backsolve(L, X, transpose = TRUE)     # 탈상관
+  ys <- backsolve(L, y, transpose = TRUE)
+  b  <- qr.coef(qr(Xs), ys)
+  s2 <- sum((ys - Xs %*% b)^2) / n
+  list(b = b, s2 = s2, Xs = Xs, rho = rho, nu = nu,
+       nll = 0.5 * (n * log(2 * pi * s2) + 2 * sum(log(diag(L))) + n))
+}
+op <- optim(c(log(2), log(1)), function(p) gp_fit(p)$nll)
+gf <- gp_fit(op$par)
+se_gp <- sqrt(diag(gf$s2 * solve(crossprod(gf$Xs))))
+round(c(beta_depth = gf$b[2], se = se_gp[2], sigma2 = gf$s2,
+        tau2 = gf$s2 * gf$nu, range = gf$rho, logLik = -op$value), 4)
+```
+
+```{r}
+#| label: gp-nlme
+glS <- gls(g01 ~ depth, data = vs, method = "ML",
+           correlation = corExp(form = ~ x + y, nugget = TRUE))
+round(summary(glS)$tTable, 5)
+c(logLik_gls = as.numeric(logLik(glS)), logLik_direct = -op$value)
+```
+
+- 직접 구현한 가능도와 `nlme::gls(corExp)`의 로그가능도가 같음 (−480.89)
+- 추정 공간 모수: $\hat\sigma^2 = 0.288$ (참 0.30), $\hat\rho = 2.21$ (참 3), $\hat\tau^2 = 0.138$
+
+| | 깊이 계수 | 표준오차 | 95% CI | 참 0.10 포함 |
+|---|---|---|---|---|
+| OLS | 0.1223 | 0.0042 | (0.114, 0.131) | **✗** |
+| GP-GLS | 0.1249 | 0.0142 | (0.097, 0.153) | ✓ |
+
+- 시계열과 똑같은 이야기 — OLS 표준오차가 **3.4배 작음**
+- 이웃 spot 600개가 독립된 600개의 정보가 아님
+
+```{r}
+#| label: vis-gam
+#| fig-cap: "GAM 2차원 평활 s(x, y)로 추정한 공간 패턴 (왼쪽)과 잔차 (오른쪽)"
+#| fig-width: 9
+#| fig-height: 4.5
+gs <- gam(g01 ~ s(x, y, k = 60), data = vs, method = "REML")
+op2 <- par(mfrow = c(1, 2), mar = c(1, 1, 2, 1))
+plot(vs$x, -vs$y, col = pal(fitted(gs)), pch = 16, cex = 1.3,
+     asp = 1, axes = FALSE, xlab = "", ylab = "", main = "s(x, y)")
+plot(vs$x, -vs$y, col = pal(resid(gs)), pch = 16, cex = 1.3,
+     asp = 1, axes = FALSE, xlab = "", ylab = "", main = "residual")
+par(op2)
+c(edf = summary(gs)$s.table[1, "edf"],
+  moran_I_resid = moran(resid(gs), Wn)[["I"]])
+round(tapply(resid(gs), vs$region, var), 3)
+```
+
+- 6-I의 GAM을 좌표 두 개에 적용 → 매끄러운 공간 패턴을 비모수로 추정 (edf 43)
+  - 박판 스플라인(thin plate spline)은 GP 회귀와 수학적으로 가까운 친척
+- 평활 후 잔차의 Moran's I 0.03 (평활 전 0.41) — 공간상관이 평활항으로 흡수됨
+- 잔차 분산: 회색질 0.196 vs 백질 0.408 → 백질이 **2배** (참 잡음분산 0.123 vs 0.36) → **공간적 이분산**
+
+#### 공간변이 유전자 (SVG) 스캔
+
+- 공간전사체 분석의 첫 질문: **어떤 유전자가 공간 패턴을 갖는가**
+- 귀무가설 = 공간상관 없음 → Moran's I 검정을 유전자마다
+
+```{r}
+#| label: svg-scan
+genes <- sprintf("g%02d", 1:50)
+sc <- t(sapply(genes, function(g) moran(vs[[g]], Wn)))
+det <- sc[, "p"] < 0.05 / length(genes)          # Bonferroni
+table(truth_SVG = vt$is_svg, detected = det)
+round(range(sc[vt$is_svg == 1, "I"]), 3)
+round(range(sc[vt$is_svg == 0, "I"]), 3)
+```
+
+- 참 SVG 10개를 **모두** 찾고 위양성 0
+- SVG의 $I$는 0.29~0.71, 비SVG는 0 근처
+
+::: {.callout-tip}
+## 실제 SVG 도구
+| 도구 | 접근 |
+|---|---|
+| `Seurat::FindSpatiallyVariableFeatures` | Moran's I |
+| `SpatialDE`, `nnSVG` | **GP 회귀** — 공간분산 $\sigma^2 = 0$ 대 $> 0$ 가능도비 검정 |
+| `SPARK`, `SPARK-X` | 공간 공분산 커널을 쓴 혼합모형 / 비모수 검정 |
+
+- `nnSVG`는 이 절의 GP 모형을 nearest-neighbor 근사로 수만 spot까지 확장
+- 공간 통계도 시계열처럼 한 과목 분량
+:::
+
+## 3. Mixed Effects Models
+
+- 마지막 확장: 반응 자료에 **반복(replication)** 이 있을 때
+
+### 3.1 ANOVA 복습
+
+- **Data**: $Y_{ij}$, $j = 1, \dots, n_i$; $i = 1, \dots, k$
+- **Model**
+
+$$Y_{ij} = \mu_i + \varepsilon_{ij} = \mu + \tau_i + \varepsilon_{ij},
+\qquad \sum_{i=1}^{k}\tau_i = 0$$
+
+- $\mu_i = \mu + \tau_i$ — $i$번째 집단 평균을 전체 평균 + 집단 효과로 분해
+- 이 절의 예: **가계(family)** 를 집단으로 — 300가계 × 5명
+
+```{r}
+#| label: fam-load
+fm <- read.csv("data/family_cohort.csv")
+fm$fid <- factor(fm$fid)
+dim(fm)
+head(fm, 5)
+table(fm$role)
+```
+
+```{r}
+#| label: anova-fixed
+## 가계를 고정효과로 둔 일원 ANOVA
+av <- anova(lm(ldl ~ fid, data = fm))
+av
+```
+
+- 가계 간 LDL 평균이 다름 ($F = 1.89$, df 299, 1200, $p = 6\times10^{-14}$) — 가족끼리 닮음
+- 그런데 이 300가계는 **모집단의 표본**일 뿐 — 이 가계들 자체에 관심이 있는 것이 아님
+
+### 3.2 Random effects
+
+- 각 표본이 같은 대상·같은 실험조건의 **반복**으로 이루어진 경우가 많음
+  - 예: 피험자별 반복 신경학적 검사, 의료기관별 환자, 가계별 구성원
+- 이때 집단 효과 $\tau_i$는 **무작위**로 보는 것이 자연스러움 — 가능한 집단 중 일부만 표본으로 뽑았으므로
+
+$$\varepsilon_{ij} \sim N(0, \sigma^2), \qquad \tau_i \sim N(0, \sigma_a^2)$$
+
+- 오차항은 원래 선형모형 가정 그대로, 임의효과도 평균 0
+- 두 분산 $\sigma^2$, $\sigma_a^2$는 **서로 다른 모수**
+- 관심: 집단 간 변동이 있는가 ($\sigma_a^2 > 0$?), 얼마나 큰가
+
+::: {.callout-important}
+## 고정효과 ANOVA와의 차이 — 관측치가 독립이 아님
+$$\text{Cov}(Y_{ij}, Y_{ij'}) = \sigma_a^2 \quad (j \ne j'),
+\qquad
+\text{Corr}(Y_{ij}, Y_{ij'}) = \frac{\sigma_a^2}{\sigma_a^2 + \sigma^2} = \text{ICC}$$
+
+- 오차항이 서로 독립이어도 **같은 집단의 관측치는 상관됨**
+- 급내상관계수(ICC) = 같은 집단 두 관측치의 상관
+:::
+
+- 언제 임의효과로 보나: 그 집단에서 관측한 반응이 **더 큰 모집단의 표본**이라고 생각할 수 있을 때
+  - 여러 의료기관의 자료 → "기관"은 무작위 (모든 기관을 관측할 수 없음)
+  - 여러 캠퍼스 학생 설문 → "캠퍼스"는 무작위
+  - 여러 가계의 구성원 → **"가계"는 무작위**
+
+```{r}
+#| label: random-anova
+## 임의효과 모형: REML
+re0 <- lme(ldl ~ 1, random = ~ 1 | fid, data = fm, method = "REML")
+VarCorr(re0)
+
+## 공식 직접 계산: 균형자료의 ANOVA 추정량
+MSA <- av$`Mean Sq`[1]; MSE <- av$`Mean Sq`[2]; n0 <- 5
+s2a <- (MSA - MSE) / n0
+c(sigma2_a_anova = s2a, sigma2_anova = MSE,
+  sigma2_a_reml = as.numeric(VarCorr(re0)[1, 1]),
+  ICC = s2a / (s2a + MSE))
+```
+
+$$E(MSA) = \sigma^2 + n_0\,\sigma_a^2, \quad E(MSE) = \sigma^2
+\ \Rightarrow\ \hat\sigma_a^2 = \frac{MSA - MSE}{n_0}$$
+
+- 균형자료에서는 ANOVA 추정량 = REML 추정량 (0.08128, 차이는 `lme` 최적화의 허용오차 수준)
+- ICC 0.15 — 공변량 보정 전 LDL의 가계 내 상관
+
+### 3.3 Mixed effects 모형
+
+- 다중회귀로 확장: 어떤 요인은 **고정**, 어떤 요인은 **무작위** → 혼합효과모형
+- 원자료의 예: 혈압약 효과 연구
+  - 환자마다 1주간 매일 혈압 측정 → 환자 효과 $\tau_i$는 무작위 (약효가 사람마다 다름)
+  - 시간(요일) 효과는 고정
+
+$$Y_{ij} = \mu + \tau_i + \alpha X_{ij} + \varepsilon_{ij},
+\qquad \varepsilon_{ij} \sim N(0, \sigma^2),\ \tau_i \sim N(0, \sigma_a^2)$$
+
+- 원자료에서는 $X_{ij} = j$, $j = 1, \dots, 7$ (측정일)
+- 추정: 최대가능도(ML) 또는 그 변형(**REML**)
+- $X$가 사람마다 다르거나 결측이 있으면 추정이 더 복잡해짐
+- $\mathbf Y$의 공분산이 대각행렬이 아님 → **복잡하므로 컴퓨터로** ("그것이 컴퓨터가 있는 이유")
+
+| 원자료 | 이 장 |
+|---|---|
+| 환자 $i$의 $j$번째 측정 | 가계 $i$의 $j$번째 구성원 |
+| 고정: 측정일 | 고정: `snp_LDLR`, 나이, 성별, BMI |
+| 무작위: 환자 효과 | 무작위: 가계 효과 |
+
+```{r}
+#| label: mixed-fit
+f  <- ldl ~ snp_LDLR + age + sex + bmi
+ol <- lm(f, data = fm)
+mx <- lme(f, random = ~ 1 | fid, data = fm, method = "REML")
+round(rbind(OLS = summary(ol)$coef["snp_LDLR", 1:2],
+            Mixed = summary(mx)$tTable["snp_LDLR", 1:2]), 4)
+VarCorr(mx)
+```
+
+- 고정효과 추정치는 비슷함, 표준오차가 달라짐
+
+#### 가계 효과 하나로 충분한가 — 관계별 상관
+
+- 임의절편 모형은 가계 안 **모든 쌍의 상관이 같다**고 가정
+- 그러나 배우자는 유전적으로 무관, 부모–자녀·형제는 유전자의 절반을 공유
+
+```{r}
+#| label: pair-cor
+## 공변량 보정 잔차의 관계별 상관 (가계 안 모든 쌍을 모아서)
+r  <- resid(ol)
+id <- matrix(seq_len(nrow(fm)), ncol = 5, byrow = TRUE)
+pc <- function(a, b) {
+  x1 <- as.vector(id[, a]); x2 <- as.vector(id[, b])
+  cor(c(r[x1], r[x2]), c(r[x2], r[x1]))
+}
+c(spouse = pc(1, 2),
+  parent_child = pc(c(1, 1, 1, 2, 2, 2), c(3, 4, 5, 3, 4, 5)),
+  sibling = pc(c(3, 3, 4), c(4, 5, 5)))
+```
+
+| 관계 | 관측 상관 | 기대값 $K_{ij}\,h^2$ |
+|---|---|---|
+| 배우자 | −0.05 | $0 \times 0.5 = 0$ |
+| 부모–자녀 | 0.22 | $0.5 \times 0.5 = 0.25$ |
+| 형제 | 0.24 | $0.5 \times 0.5 = 0.25$ |
+
+- 상관의 크기가 **공유하는 유전자의 비율**에 비례 → 가계라는 범주보다 **혈연 정도**가 본질
+
+#### 혈연행렬 LMM — GCTA·GEMMA의 모형
+
+$$\mathbf y = \mathbf X\boldsymbol\beta + \mathbf g + \boldsymbol\varepsilon,
+\qquad
+\mathbf g \sim N(\mathbf 0, \sigma_g^2\mathbf K),
+\quad
+\boldsymbol\varepsilon \sim N(\mathbf 0, \sigma_e^2\mathbf I)$$
+
+$$V(\mathbf y) = \sigma_g^2\mathbf K + \sigma_e^2\mathbf I,
+\qquad h^2 = \frac{\sigma_g^2}{\sigma_g^2 + \sigma_e^2}$$
+
+- $\mathbf K$ — 혈연행렬: $2 \times$ 혈연계수 (자기 자신 1, 부모–자녀·형제 0.5, 무관 0)
+  - 가계도로 계산 (pedigree) 또는 SNP로 추정 (**GRM**, GCTA)
+- 임의효과가 "집단" 하나가 아니라 **개인마다** 있고, 그 상관이 $\mathbf K$로 정해짐
+- 임의절편 모형은 $\mathbf K$ 대신 가계 블록이 전부 1인 행렬 $\mathbf J$를 쓴 특수한 경우
+
+::: {.callout-important}
+## 계산의 핵심 — 고유분해 회전 = WLS
+- $\mathbf K = \mathbf U\boldsymbol\Lambda\mathbf U^\top$이면
+
+$$V(\mathbf U^\top\mathbf y) = \sigma_g^2\boldsymbol\Lambda + \sigma_e^2\mathbf I
+= \mathrm{diag}(\sigma_g^2\lambda_k + \sigma_e^2)$$
+
+- 회전한 자료는 **서로 무상관, 분산만 다름** → 가중치 $1/(\sigma_g^2\lambda_k + \sigma_e^2)$인 **WLS**
+- 고유분해는 한 번만 → 분산비 $\delta = \sigma_e^2/\sigma_g^2$ 하나에 대한 1차원 최적화
+- GEMMA, FaST-LMM, EMMAX가 수십만 명 GWAS에 쓰는 방법
+:::
+
+```{r}
+#| label: kinship
+## 핵가족 한 가계(아버지, 어머니, 자녀 3)의 혈연행렬
+K0 <- matrix(0.5, 5, 5); diag(K0) <- 1
+K0[1, 2] <- K0[2, 1] <- 0                     # 배우자는 무관
+K0
+e0 <- eigen(K0, symmetric = TRUE)
+round(e0$values, 4)
+```
+
+- 가계들은 서로 독립 → 전체 $\mathbf K$는 이 $5\times5$ 블록 300개의 블록대각
+- 모든 가계가 같은 구조 → 고유분해도 한 블록만 하면 됨
+
+```{r}
+#| label: reml-direct
+## 공식 직접 계산: 회전 + WLS + REML (분산비 delta 1차원 최적화)
+X  <- model.matrix(f, data = fm); y <- fm$ldl
+nf <- nlevels(fm$fid)
+rotate <- function(M, U0) {                   # 가계별로 U0' 곱하기
+  M <- as.matrix(M); out <- M
+  for (k in seq_len(nf)) {
+    ix <- id[k, ]; out[ix, ] <- t(U0) %*% M[ix, , drop = FALSE]
+  }
+  out
+}
+lmm_reml <- function(U0, lam0) {
+  yr <- rotate(y, U0); Xr <- rotate(X, U0); lam <- rep(lam0, nf)
+  nn <- length(y); p <- ncol(X)
+  prof <- function(delta) {                   # REML 프로파일 가능도
+    w <- 1 / (lam + delta); XtW <- t(Xr * w); A <- XtW %*% Xr
+    b <- solve(A, XtW %*% yr); s2 <- sum(w * (yr - Xr %*% b)^2) / (nn - p)
+    -0.5 * ((nn - p) * log(s2) + sum(log(lam + delta)) +
+              as.numeric(determinant(A)$modulus))
+  }
+  delta <- optimize(prof, c(1e-4, 1e3), maximum = TRUE)$maximum
+  w <- 1 / (lam + delta)
+  fit <- lm(yr ~ 0 + Xr, weights = w)
+  s2g <- sum(w * resid(fit)^2) / (nn - p)
+  list(fit = fit, w = w, s2g = s2g, s2e = delta * s2g,
+       h2 = 1 / (1 + delta))
+}
+km <- lmm_reml(e0$vectors, e0$values)
+c(sigma2_g = km$s2g, sigma2_e = km$s2e, h2 = km$h2, h2_true = 0.5)
+```
+
+```{r}
+#| label: reml-check
+## 검증 1: 같은 코드에 K 대신 J(가계 블록 전부 1)를 넣으면 lme와 같아야 함
+eJ <- eigen(matrix(1, 5, 5), symmetric = TRUE)
+jm <- lmm_reml(eJ$vectors, pmax(eJ$values, 0))
+rbind(direct = c(sigma2_a = jm$s2g, sigma2 = jm$s2e),
+      lme    = as.numeric(VarCorr(mx)[, 1]))
+
+## 검증 2: 회전 WLS = GLS 공식 (X'V^-1 X)^-1 X'V^-1 y
+V  <- kronecker(diag(nf), km$s2g * K0 + km$s2e * diag(5))
+Vi <- solve(V)
+b_gls <- solve(t(X) %*% Vi %*% X, t(X) %*% Vi %*% y)
+max(abs(b_gls - coef(km$fit)))
+```
+
+- 직접 구현한 REML이 `nlme::lme`의 분산성분을 그대로 재현 → 코드 검증
+- 회전 WLS와 $1500\times1500$ GLS 공식이 기계 정밀도에서 일치
+
+```{r}
+#| label: lmm-compare
+cf <- summary(km$fit)$coef
+round(rbind(OLS = summary(ol)$coef["snp_LDLR", 1:2],
+            RandomIntercept = summary(mx)$tTable["snp_LDLR", 1:2],
+            KinshipLMM = cf["Xrsnp_LDLR", 1:2],
+            truth = c(0.28, NA)), 4)
+```
+
+| 모형 | 공분산 구조 | `snp_LDLR` | 표준오차 | 분산성분 |
+|---|---|---|---|---|
+| OLS | $\sigma^2\mathbf I$ | 0.307 | 0.026 | — |
+| 가계 임의절편 | $\sigma_a^2\mathbf J + \sigma^2\mathbf I$ | 0.310 | 0.028 | $\sigma_a^2 = 0.079$ |
+| **혈연 LMM** | $\sigma_g^2\mathbf K + \sigma_e^2\mathbf I$ | 0.309 | 0.029 | $\hat h^2 = 0.46$ (참 0.5) |
+
+- `snp_LDLR` 효과 자체는 세 모형이 비슷 (참 0.28)
+- 혈연 LMM은 덤으로 **유전율**을 줌 — GCTA-GREML이 하는 일
+
+### 3.4 예제 — 가계 자료의 GWAS
+
+- 가계 자료의 GWAS에서 혈연을 무시하면?
+  - 친척은 유전형도 닮고(SNP 공유) 표현형도 닮음(다유전자 배경 공유)
+  - → **효과가 없는 SNP**도 검정통계량이 부풀려짐
+- 귀무 SNP 1000개 (전부 참 효과 0)를 세 방법으로 검정
+
+```{r}
+#| label: gwas-null
+Gn <- as.matrix(read.csv(gzfile("data/family_geno.csv.gz"),
+                         row.names = 1))
+dim(Gn)
+Xc <- model.matrix(~ age + sex + bmi, data = fm)
+z_of <- function(yy, XX, G, w = NULL) apply(G, 2, function(g) {
+  s <- summary(lm(yy ~ 0 + XX + g, weights = w))$coef
+  s[nrow(s), 3]
+})
+z_ols <- z_of(y, Xc, Gn)
+z_ri  <- z_of(rotate(y, eJ$vectors), rotate(Xc, eJ$vectors),
+              rotate(Gn, eJ$vectors), w = jm$w)
+z_lmm <- z_of(rotate(y, e0$vectors), rotate(Xc, e0$vectors),
+              rotate(Gn, e0$vectors), w = km$w)
+lam_gc <- function(z) median(z^2) / qchisq(0.5, 1)
+sapply(list(OLS = z_ols, RandomIntercept = z_ri, KinshipLMM = z_lmm),
+       function(z) c(lambda_GC = lam_gc(z), mean_chi2 = mean(z^2),
+                     typeI_5pct = mean(abs(z) > 1.96)))
+```
+
+| 방법 | $\lambda_{GC}$ | 평균 $\chi^2$ | 1종 오류 (명목 5%) |
+|---|---|---|---|
+| OLS | **1.52** | 1.44 | 9.8% |
+| 가계 임의절편 | 1.14 | 1.08 | 4.8% |
+| **혈연 LMM** | 1.07 | 1.02 | 4.1% |
+
+- 귀무 SNP의 평균 $\chi^2$는 1이어야 함 → OLS는 **44% 팽창**
+  - 이론적 예측: $1 + h^2 \times (\text{가계 내 } \sum_{j\ne i}K_{ij}^2) \approx 1 + 0.5\times0.9 = 1.45$
+- 가계 임의절편도 상당 부분 교정, 혈연 LMM이 가장 정확
+- 3-IV/V에서 **집단층화**를 PC로 보정했던 것과 같은 계열의 문제 — 여기서는 **숨은 혈연**
+
+```{r}
+#| label: qq-plot
+#| fig-cap: "귀무 SNP 1000개의 QQ 그림 — OLS는 대각선 위로 들림"
+#| fig-width: 5.5
+#| fig-height: 5
+ex <- qchisq(ppoints(1000), 1)
+plot(sort(ex), sort(z_ols^2), pch = 19, cex = 0.6, col = "#c44e52",
+     xlab = "Expected chi-square", ylab = "Observed chi-square")
+points(sort(ex), sort(z_lmm^2), pch = 19, cex = 0.6, col = "#4c72b0")
+abline(0, 1, lty = 2)
+legend("topleft", c("OLS", "Kinship LMM"), pch = 19,
+       col = c("#c44e52", "#4c72b0"), bty = "n")
+```
+
+```{r}
+#| label: grm
+## 가계도 없이 SNP로 혈연 추정: GRM = Z Z' / M
+Z   <- scale(Gn)
+grm <- tcrossprod(Z) / ncol(Z)
+rel <- matrix("unrelated", nrow(fm), nrow(fm))
+for (k in seq_len(nf)) rel[id[k, ], id[k, ]] <- "relative"
+for (k in seq_len(nf)) rel[id[k, 1], id[k, 2]] <-
+  rel[id[k, 2], id[k, 1]] <- "spouse"
+ut <- upper.tri(grm)
+round(tapply(grm[ut], rel[ut], mean), 4)
+round(tapply(grm[ut], rel[ut], sd), 4)
+```
+
+- SNP 1000개만으로도 GRM이 가계도 혈연(0.5 / 0 / 0)을 복원
+- 실제 GWAS 코호트(UK Biobank 등)에는 **본인도 모르는 먼 친척**이 많음 → 가계도가 없으니 GRM을 씀
+  - 이것이 GCTA, BOLT-LMM, REGENIE, SAIGE가 모두 LMM인 이유
+
+::: {.callout-warning}
+## LMM을 쓸 때 주의
+- **공유환경**: 가족은 유전자뿐 아니라 식탁도 공유함 → $\mathbf K$만 넣으면 $h^2$ 과대추정
+  - 가구(household) 임의효과를 하나 더 넣는 것이 표준 (이 시뮬레이션에는 없음)
+- **근접 오염(proximal contamination)**: 검정하는 SNP가 GRM에 들어 있으면 검정력 손실
+  → 검정 SNP의 염색체를 빼고 GRM을 만듦 (LOCO)
+- 분산성분은 경계(0)에서 추정될 수 있음 — 검정 시 $\chi^2$ 혼합분포
+:::
+
+## 4. Regression Analysis Overview
+
+### 언제 무엇을 쓸 것인가
+
+| 반응 $Y$ | 설명변수 | 모형 | 이 강의의 예 |
+|---|---|---|---|
+| 연속 | 양적 1개 | 단순선형회귀 | 1-I~III |
+| 연속 | 범주 1개 이상 | ANOVA | 2-I~II |
+| 연속 | 여럿 (양적·질적) | 다중선형회귀 | KNU-Lipid LDL (3) |
+| 이분 | 여럿 | 로지스틱 회귀 | METABRIC 5년 사망, 케이스-컨트롤 GWAS (4-I~III) |
+| 카운트 | 여럿 | 포아송 / 음이항 | RNA-seq 카운트 (4-IV~V) |
+| 지수족 일반 | 여럿 | GLM | — |
+| 연속 | $p \gg n$ | 변수선택·벌점회귀 | 고차원 GWAS, PRS (5) |
+
+| 깨진 가정 | 모형 | 이 강의의 예 |
+|---|---|---|
+| 등분산 | WLS | 메틸화 coverage (6-I) |
+| 정규성 (이상치) | 로버스트 회귀 | LDLR eQTL (6-I) |
+| 선형성 (구조 앎) | 비선형 회귀 | NMR 스펙트럼 (6-I) |
+| 선형성 (구조 모름) | GAM | 메틸화 ~ 나이·BMI (6-I) |
+| 독립성 — 시간 | 시계열 회귀 | CGM (6-II) |
+| 독립성 — 공간 | 공간 회귀 | Visium (6-II) |
+| 독립성 — 반복·군집 | 혼합효과모형 | 가계 GWAS (6-II) |
+
+### 전체 정리
+
+| | 자료 | 모형 | 가정 | 추정 | $\hat\beta$의 성질 |
+|---|---|---|---|---|---|
+| **Simple** | $\{(X_i, Y_i)\}$ | $Y_i = \beta_0 + \beta_1X_i + \epsilon_i$ | 선형성, 등분산, 독립, 정규 | 최소제곱 | 불편, $t_{n-2}$ |
+| **ANOVA** | $\{Y_{ij}\}$ | $Y_{ij} = \mu_i + \epsilon_{ij}$ | 등분산, 독립, 정규 (선형성 없음) | 집단 표본평균 | 불편 |
+| **Multiple** | $\{(x_{i1}, \dots, x_{ip}), Y_i\}$ | $Y_i = \beta_0 + \sum_j\beta_jx_{ij} + \epsilon_i$ | 선형성, 등분산, 독립, 정규 | 사영행렬 $\mathbf H$ | 불편, $t_{n-p-1}$ |
+| **Logistic** | 이분 $Y$ | $\text{logit}\,p = \beta_0 + \sum_j\beta_jx_j$ | 선형성, 독립, logit 연결 (오차항 없음) | MLE | 근사 정규 |
+| **Poisson** | 카운트 $Y$ | $\log E(Y) = \beta_0 + \sum_j\beta_jx_j$ | 선형성, 독립, log 연결, $E(Y) = V(Y)$ | MLE | 근사 정규 |
+| **GLM** | 지수족 $Y$ | $g\{E(Y)\} = \beta_0 + \sum_j\beta_jx_j$ | $Y$의 분포에 따라 $g$ | MLE | 근사 정규 |
+| **Weighted** | 다중과 같음 | 다중과 같음 | $V(\boldsymbol\epsilon) = \boldsymbol\Sigma$ | 가중 최소제곱 (닫힌 해) | 불편, $V = (\mathbf X^\top\boldsymbol\Sigma^{-1}\mathbf X)^{-1}$ |
+| **Robust** | 다중과 같음 | 다중과 같음 | 대칭, 두꺼운 꼬리 허용 | 절대편차합 최소 (IRLS) | 근사 |
+| **Nonlinear** | 다중과 같음 | $Y_i = f(\mathbf x_i \mid \boldsymbol\theta) + \epsilon_i$ | 다중과 같음 | 최소제곱 (수치) | 근사 |
+| **GAM** | 다중과 같음 | $\alpha + f_1(x_1) + \cdots + f_p(x_p)$, $f$ 매끄러움 | 지수족 | backfitting (수렴까지) | — |
+| **Mixed** | $\{Y_{ij}\}$ + $x_{ij}$ | $Y_{ij} = \mu + \tau_i + \alpha X_{ij} + \epsilon_{ij}$ | $\tau_i \sim N(0, \sigma_a^2)$, 군집 내 상관 | ML / REML | 근사 정규 |
+
+- 단순선형회귀 → ANOVA → 다중회귀 → GLM(로지스틱·포아송) → 변수선택 → 가정별 확장
+- 마지막 GAM은 지수족 반응 전체에 비선형성까지 허용 → 이 강의 모형들의 일반화
+- 세부 사항이 많았던 이유: **회귀모형을 올바르고 엄밀하게 쓰려면 그 세부가 결정적**
+
+::: {.callout-note}
+## 이 강의를 마치며
+- 다룬 것: 선형·로지스틱·포아송 회귀, GLM, 모형선택, 그리고 가정이 깨질 때의 확장
+- 모든 예제를 R로 직접 구현하고, 가능한 곳마다 **공식으로 한 번 더 계산**해 확인함
+- 모든 시뮬레이션 자료는 참값을 알고 있었음 → "추정치 vs 참값"으로 방법의 성질을 눈으로 확인
+- 이 강의는 더 고급의 통계·기계학습 모형으로 가는 기초
+  - 시계열 분석, 공간통계, 혼합모형, 베이즈 방법, 통계유전학 — 각각 한 과목 분량
+:::

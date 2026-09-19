@@ -1,0 +1,389 @@
+---
+title: "5-II. Regularized Regression"
+description: "벌점회귀 — Ridge, Lasso, Elastic Net과 λ의 선택"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="5-II. 벌점회귀">
+        <meta name="ai-context" content="
+        이 챕터는 벌점회귀를 다룹니다. 자료는 KNU-Lipid 확장판 SNP 2000개, 반응변수는 총콜레스테롤입니다.
+        변수를 고르는 대신 계수를 0 쪽으로 줄이는 접근입니다.
+        목적함수는 잔차제곱합에 벌점을 더한 것이고, 벌점의 형태가 방법을 결정합니다.
+        Ridge는 L2 벌점으로 계수를 줄이지만 0으로 만들지 않고, 닫힌 해 (X'X + n*lambda*I)^(-1) X'y 가 있습니다.
+        p > n 이어도 X'X + n*lambda*I 는 항상 역행렬이 있으므로 풀립니다.
+        Lasso는 L1 벌점으로 계수를 정확히 0으로 만들어 변수선택을 동시에 합니다.
+        기하적으로 L1 공의 모서리가 축 위에 있기 때문입니다.
+        Lasso의 한계는 p > n 일 때 최대 n개까지만 고를 수 있다는 점과
+        상관이 높은 변수 묶음에서 하나만 고른다는 점입니다.
+        Elastic Net은 L1과 L2를 섞어 이 문제를 완화합니다.
+        표준화는 필수입니다. 척도가 다르면 벌점이 공평하게 적용되지 않습니다.
+        lambda는 교차검증으로 고르며 lambda.min과 lambda.1se 두 가지 관행이 있습니다.
+        이 자료에서 lasso lambda.min은 163개를 골라 그중 28개가 참 인과이고 검정 증가 R2는 0.267,
+        ridge는 2000개 전부를 남기고 0.104, elastic net은 193개로 0.261입니다.
+        LD 블록에서 lasso는 snp_LDLR 하나만 고르고 ridge는 네 SNP에 계수를 고루 나눕니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `5-II. (Model selection) Regularized Regression.docx`
+- 데이터: `data/gwas_geno_wide.csv.gz`, `data/gwas_tc.csv`, `data/gwas_geno_truth.csv`
+:::
+
+```{r}
+#| label: setup
+#| include: false
+library(glmnet)
+G   <- as.matrix(read.csv(gzfile("data/gwas_geno_wide.csv.gz"),
+                          row.names = 1))
+tru <- read.csv("data/gwas_geno_truth.csv", row.names = 1)
+ph  <- read.csv("data/gwas_tc.csv")
+co  <- read.csv("data/gwas_cohort.csv")
+keep <- co$fh_carrier == 0
+G <- G[keep, ]; y <- ph$tc[keep]; co <- co[keep, ]
+set.seed(7)
+idx <- sample(nrow(G), 1000)
+Gtr <- G[idx, ];  Gte <- G[-idx, ]
+dtr <- co[idx, ]; dte <- co[-idx, ]
+ytr <- y[idx];    yte <- y[-idx]
+mc  <- lm(ytr ~ age + sex + bmi + PC1, data = dtr)
+rtr <- resid(mc)
+Xs  <- scale(Gtr)
+ys  <- as.numeric(scale(rtr))
+Xte <- scale(Gte, center = attr(Xs, "scaled:center"),
+             scale = attr(Xs, "scaled:scale"))
+incR2 <- function(p) {
+  summary(lm(yte ~ p + age + sex + bmi + PC1, data = dte))$r.squared -
+    summary(lm(yte ~ age + sex + bmi + PC1, data = dte))$r.squared
+}
+```
+
+## 1. Penalties
+
+### 1.1 벌점을 더한 최소제곱
+
+$$\hat{\boldsymbol\beta} = \arg\min_{\boldsymbol\beta}
+\Bigl\{ \underbrace{\|\mathbf{y} - \mathbf{X}\boldsymbol\beta\|^2}_{SSE}
++ \lambda\, P(\boldsymbol\beta) \Bigr\}$$
+
+- $\lambda$ — 벌점의 세기. $\lambda = 0$이면 최소제곱, $\lambda \to \infty$면 모든 계수가 0
+- $P(\boldsymbol\beta)$ — 벌점의 형태. **이것이 방법을 결정함**
+
+| 이름 | 벌점 $P(\boldsymbol\beta)$ | 계수를 0으로? | 해 |
+|---|---|---|---|
+| Best subset ($L_0$) | $\sum_j I(\beta_j \ne 0)$ | 예 | 조합 탐색 (NP-hard) |
+| **Ridge** ($L_2$) | $\sum_j \beta_j^2$ | 아니오 | 닫힌 해 |
+| **Lasso** ($L_1$) | $\sum_j \lvert\beta_j\rvert$ | 예 | 볼록 최적화 |
+| **Elastic Net** | $\alpha\sum\lvert\beta_j\rvert + \frac{1-\alpha}{2}\sum\beta_j^2$ | 예 | 볼록 최적화 |
+
+::: {.callout-important}
+- $L_0$는 우리가 5-I에서 한 부분집합 탐색과 같음 — 정확하지만 계산 불가
+- $L_1$은 $L_0$를 **볼록 완화**한 것 — 계산 가능하면서 변수선택도 됨
+- 이것이 Lasso가 널리 쓰이는 이유
+:::
+
+### 1.2 왜 L1은 0을 만들고 L2는 못 만드는가
+
+- 제약조건 형태로 다시 쓰면
+
+$$\min \|\mathbf{y} - \mathbf{X}\boldsymbol\beta\|^2
+\quad \text{s.t.} \quad
+\underbrace{\sum_j\lvert\beta_j\rvert \le t}_{L_1: \ \text{마름모}}
+\quad \text{or} \quad
+\underbrace{\sum_j\beta_j^2 \le t}_{L_2: \ \text{원}}$$
+
+```{r}
+#| label: l1-l2-geometry
+#| fig-cap: "제약영역의 모양 — L1은 축 위에 뾰족한 모서리가 있음"
+#| fig-width: 8
+#| fig-height: 4
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1), pty = "s")
+th <- seq(0, 2 * pi, length.out = 200)
+plot(cos(th), sin(th), type = "l", lwd = 2, col = "#4c72b0",
+     xlim = c(-1.6, 1.6), ylim = c(-1.6, 1.6),
+     xlab = "beta1", ylab = "beta2", main = "L2 (ridge)")
+abline(h = 0, v = 0, col = "grey80")
+plot(c(1, 0, -1, 0, 1), c(0, 1, 0, -1, 0), type = "l", lwd = 2,
+     col = "#c44e52", xlim = c(-1.6, 1.6), ylim = c(-1.6, 1.6),
+     xlab = "beta1", ylab = "beta2", main = "L1 (lasso)")
+abline(h = 0, v = 0, col = "grey80")
+points(c(1, 0, -1, 0), c(0, 1, 0, -1), pch = 19, col = "#c44e52")
+par(op)
+```
+
+- SSE의 등고선(타원)이 제약영역에 처음 닿는 점이 해
+- $L_2$는 매끄러운 원 → 닿는 점의 좌표가 정확히 0이 되는 일은 거의 없음
+- $L_1$은 축 위에 **모서리**가 있음 → 모서리에서 닿을 확률이 높음 → $\beta_j = 0$
+
+## 2. Approaches
+
+### 2.1 표준화는 필수
+
+- 벌점 $\sum\beta_j^2$이나 $\sum\lvert\beta_j\rvert$는 **계수의 크기**를 재는데,
+  계수의 크기는 $X_j$의 단위에 따라 달라짐
+- → 표준화하지 않으면 **분산이 큰 변수가 유리**해짐
+
+```{r}
+#| label: standardize-why
+## SNP마다 표준편차가 다름 (MAF에 따라)
+round(range(apply(Gtr, 2, sd)), 3)
+
+b_ns <- as.numeric(coef(glmnet(Gtr, rtr, alpha = 1, lambda = 0.03,
+                               standardize = FALSE)))[-1]
+b_s  <- as.numeric(coef(glmnet(Gtr, rtr, alpha = 1, lambda = 0.03,
+                               standardize = TRUE)))[-1]
+maf <- colMeans(Gtr) / 2
+rbind(selected = c(no_std = sum(b_ns != 0), std = sum(b_s != 0)),
+      mean_maf = c(mean(maf[b_ns != 0]), mean(maf[b_s != 0])))
+```
+
+- 표준화하지 않으면 **흔한 변이(MAF가 큰 SNP)** 쪽으로 쏠림 (평균 MAF 0.351 vs 0.277)
+- `glmnet`의 기본값은 `standardize = TRUE`이고, 계수는 원 척도로 되돌려 줌
+- 절편에는 벌점을 주지 않음
+
+### 2.2 Ridge
+
+$$\hat{\boldsymbol\beta}_{\text{ridge}}
+= \arg\min \Bigl\{ \|\mathbf{y} - \mathbf{X}\boldsymbol\beta\|^2
++ \lambda\|\boldsymbol\beta\|_2^2 \Bigr\}
+= (\mathbf{X}^T\mathbf{X} + \lambda\mathbf{I})^{-1}\mathbf{X}^T\mathbf{y}$$
+
+::: {.callout-important}
+- 대각선에 $\lambda$를 더하면 $\mathbf{X}^T\mathbf{X} + \lambda\mathbf{I}$는 **항상 역행렬이 있음**
+- → $p > n$이어도, 완전공선이어도 풀림
+- 이것이 Ridge가 다중공선성의 표준 해법인 이유 (Part 3-III의 VIF 문제)
+- 대신 계수가 정확히 0이 되지 않음 → **변수선택은 못 함**
+:::
+
+```{r}
+#| label: ridge-closed-form
+## glmnet의 목적함수는 (1/2n)||y-Xb||^2 + (lambda/2)||b||^2
+## 따라서 닫힌 해는 (X'X + n*lambda*I)^(-1) X'y
+ix  <- 1:40
+X   <- Xs[, ix]
+lam <- 0.1
+b_closed <- solve(crossprod(X) + nrow(X) * lam * diag(length(ix)),
+                  crossprod(X, ys))
+b_glmnet <- as.numeric(coef(glmnet(X, ys, alpha = 0, lambda = lam,
+                                   standardize = FALSE,
+                                   intercept = FALSE,
+                                   thresh = 1e-16)))[-1]
+c(max_abs_diff = max(abs(as.numeric(b_closed) - b_glmnet)))
+round(rbind(closed = as.numeric(b_closed)[1:6],
+            glmnet = b_glmnet[1:6]), 6)
+```
+
+### 2.3 Lasso
+
+$$\hat{\boldsymbol\beta}_{\text{lasso}}
+= \arg\min \Bigl\{ \|\mathbf{y} - \mathbf{X}\boldsymbol\beta\|^2
++ \lambda\|\boldsymbol\beta\|_1 \Bigr\}$$
+
+- 닫힌 해가 없음 → **좌표하강(coordinate descent)** 으로 품
+- 직교 설계에서는 한 좌표의 해가 **연성임계(soft-thresholding)**
+
+$$\hat\beta_j = S(z_j, \lambda) =
+\mathrm{sign}(z_j)\,\bigl(\lvert z_j\rvert - \lambda\bigr)_+$$
+
+```{r}
+#| label: soft-threshold
+#| fig-cap: "연성임계 — 작은 계수는 0으로, 큰 계수는 일정량만큼 당겨짐"
+z <- seq(-3, 3, length.out = 400)
+soft <- function(z, l) sign(z) * pmax(abs(z) - l, 0)
+plot(z, z, type = "l", lty = 2, col = "grey50", xlab = "z (OLS 추정)",
+     ylab = "벌점 추정치")
+lines(z, soft(z, 1), lwd = 2, col = "#c44e52")
+lines(z, z / (1 + 1), lwd = 2, col = "#4c72b0")
+abline(h = 0, v = 0, col = "grey80")
+legend("topleft", bty = "n", lwd = 2, lty = c(2, 1, 1),
+       col = c("grey50", "#c44e52", "#4c72b0"),
+       legend = c("OLS", "Lasso (soft threshold)", "Ridge"))
+```
+
+- Lasso: 임계값보다 작으면 **정확히 0**, 크면 $\lambda$만큼 평행이동
+- Ridge: 모든 계수를 같은 **비율**로 줄임 → 0이 되지 않음
+
+### 2.4 Lasso의 두 가지 한계
+
+| 한계 | 내용 | GWAS에서의 의미 |
+|---|---|---|
+| 개수 상한 | $p > n$일 때 **최대 $n$개**까지만 비영 | $p$가 수십만이면 심각 |
+| 묶음 문제 | 상관이 높은 변수 중 **하나만** 선택, 나머지는 0 | LD 블록에서 어느 것이 뽑힐지 불안정 |
+
+```{r}
+#| label: lasso-limit
+path <- glmnet(Xs, ys, alpha = 1, standardize = FALSE)
+c(n = nrow(Xs), p = ncol(Xs), max_nonzero = max(path$df))
+```
+
+### 2.5 Elastic Net
+
+$$\hat{\boldsymbol\beta}_{\text{EN}}
+= \arg\min \Bigl\{ \|\mathbf{y} - \mathbf{X}\boldsymbol\beta\|^2
++ \lambda\Bigl( \alpha\|\boldsymbol\beta\|_1
++ \tfrac{1-\alpha}{2}\|\boldsymbol\beta\|_2^2 \Bigr) \Bigr\}$$
+
+- $\alpha = 1$이면 Lasso, $\alpha = 0$이면 Ridge
+- $L_2$ 항이 **상관된 변수들을 함께 살려 주는 효과**(grouping effect)를 냄
+- $n$개 상한도 사라짐
+
+### 2.6 λ는 어떻게 고르는가
+
+- $\lambda$는 자료에서 추정하는 것이 아니라 **조율모수(tuning parameter)**
+- 교차검증으로 예측오차가 가장 작은 값을 찾음
+
+| 관행 | 의미 |
+|---|---|
+| `lambda.min` | CV 오차가 최소인 $\lambda$ |
+| `lambda.1se` | 최소 오차의 **1 표준오차 안**에서 가장 큰 $\lambda$ |
+
+- `lambda.1se`가 더 단순한 모형을 줌 → 해석이 목적이면 이쪽
+- 예측이 목적이면 보통 `lambda.min`
+
+## 3. Data Examples
+
+### 3.1 계수 경로
+
+```{r}
+#| label: paths
+#| fig-cap: "λ를 줄이며 계수가 어떻게 들어오는가"
+#| fig-width: 9
+#| fig-height: 4
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 3, 1))
+plot(glmnet(Xs, ys, alpha = 1, standardize = FALSE),
+     xvar = "lambda", main = "Lasso")
+plot(glmnet(Xs, ys, alpha = 0, standardize = FALSE),
+     xvar = "lambda", main = "Ridge")
+par(op)
+```
+
+- Lasso: 오른쪽(큰 $\lambda$)에서는 전부 0, $\lambda$가 줄면 하나씩 들어옴
+- Ridge: 모든 계수가 처음부터 비영이고 함께 커짐
+
+### 3.2 교차검증
+
+```{r}
+#| label: cv
+#| fig-cap: "10-fold 교차검증 곡선"
+#| fig-width: 9
+#| fig-height: 4
+set.seed(1)
+cv_l <- cv.glmnet(Xs, ys, alpha = 1,   nfolds = 10, standardize = FALSE)
+cv_r <- cv.glmnet(Xs, ys, alpha = 0,   nfolds = 10, standardize = FALSE)
+cv_e <- cv.glmnet(Xs, ys, alpha = 0.5, nfolds = 10, standardize = FALSE)
+op <- par(mfrow = c(1, 2), mar = c(5, 4, 3, 1))
+plot(cv_l); title("Lasso", line = 2.5)
+plot(cv_e); title("Elastic Net (alpha = 0.5)", line = 2.5)
+par(op)
+```
+
+```{r}
+#| label: cv-summary
+res <- do.call(rbind, lapply(
+  list(lasso = cv_l, ridge = cv_r, enet = cv_e), function(cv) {
+    t(sapply(c("lambda.min", "lambda.1se"), function(s) {
+      b <- as.numeric(coef(cv, s = s))[-1]
+      p <- as.numeric(Xte %*% b)
+      c(lambda = cv[[s]], nonzero = sum(b != 0),
+        true_causal = sum(b != 0 & tru$is_causal == 1),
+        test_cor = cor(p, yte), inc_R2 = incR2(p))
+    }))
+  }))
+round(res, 4)
+```
+
+::: {.callout-important}
+## 세 방법의 비교 (검정자료 증가 결정계수)
+
+| 방법 | 선택된 SNP | 그중 참 인과 | 증가 $R^2$ |
+|---|---|---|---|
+| Lasso (`lambda.min`) | 163 | 28 / 40 | **0.267** |
+| Lasso (`lambda.1se`) | 73 | 23 / 40 | 0.248 |
+| Elastic Net | 193 | 29 / 40 | 0.261 |
+| Ridge | 2000 | 40 / 40 | 0.104 |
+
+- 참 유전율은 $h^2 = 0.385$ → Lasso가 그중 약 70%를 회수
+- Ridge는 인과 SNP를 하나도 버리지 않지만, 귀무 SNP 1960개도 같이 들고 감
+  → **잡음이 신호를 덮어** 예측이 크게 나쁨
+- 신호가 희소한(sparse) 상황에서는 Lasso 계열이 유리
+:::
+
+### 3.3 LD 블록 안에서 무슨 일이 일어나는가
+
+```{r}
+#| label: ld-block
+kk <- c("snp_LDLR", "snp_LD1", "snp_LD2", "snp_AIM")
+cf <- function(cv) {
+  b <- as.numeric(coef(cv, s = "lambda.min"))[-1]
+  names(b) <- colnames(Gtr)
+  b[kk]
+}
+round(rbind(lasso = cf(cv_l), ridge = cf(cv_r), enet = cf(cv_e),
+            truth = tru[kk, "beta_true"]), 4)
+round(cor(Gtr[, kk]), 3)
+```
+
+::: {.callout-important}
+- 상관 0.85~0.95인 네 SNP에 대해
+  - **Lasso**: `snp_LDLR` 하나만 0.123, 나머지는 0
+  - **Ridge**: 네 개에 0.024 / 0.022 / 0.019 / 0.006으로 **고루 나눠 줌**
+  - **Elastic Net**: 두 개를 살림 (0.103, 0.016) — 중간
+- 참값은 `snp_LDLR`만 0.24 → Lasso가 옳게 골랐지만 계수는 **절반으로 축소**
+- 축소편향(shrinkage bias): 벌점의 대가
+:::
+
+::: {.callout-warning}
+- Lasso가 이번에 인과 변이를 고른 것은 **운**이기도 함
+  - `snp_LD1`, `snp_LD2`와의 상관이 1이 아니라 0.85~0.95였기 때문
+  - 상관이 0.99를 넘으면 어느 것이 뽑힐지 사실상 무작위
+- 그래서 GWAS에서 Lasso가 고른 SNP를 "인과 변이"라고 부르지 않음
+  → fine-mapping(SuSiE, FINEMAP 등)이 따로 필요
+:::
+
+### 3.4 다른 구현들
+
+```{r}
+#| label: other-impl
+library(MASS)
+## MASS::lm.ridge — 원자료에서 쓴 함수. lambda 척도가 glmnet과 다름
+rg <- lm.ridge(ys ~ Xs[, 1:40] - 1, lambda = seq(0, 200, 10))
+round(head(coef(rg)[, 1:4], 4), 4)
+select(rg)
+```
+
+| 패키지 | 함수 | 비고 |
+|---|---|---|
+| `MASS` | `lm.ridge` | Ridge 전용. GCV로 $\lambda$ 선택 |
+| `lars` | `lars` | LAR/Lasso 경로 알고리즘 (역사적으로 중요) |
+| **`glmnet`** | `glmnet`, `cv.glmnet` | Ridge/Lasso/EN 전부. GLM도 지원 |
+| `bigsnpr` | `snp_lassosum2` | 요약통계 기반 (5-III) |
+
+- 실무에서는 `glmnet`이 사실상 표준
+- 로지스틱·포아송에도 그대로 쓸 수 있음 (`family = "binomial"` 등)
+
+```{r}
+#| label: glmnet-binomial
+## Part 4의 이분형 형질에도 같은 방식으로
+dis <- co$disease[idx]
+cvb <- cv.glmnet(Xs, dis, family = "binomial", alpha = 1,
+                 nfolds = 10, standardize = FALSE)
+b <- as.numeric(coef(cvb, s = "lambda.min"))[-1]
+c(nonzero = sum(b != 0), lambda = cvb$lambda.min)
+```
+
+- `disease`는 `ldl`을 통해서만 유전적 영향을 받으므로 (4-III) 고른 SNP가 2개뿐
+- 문법은 연속형과 완전히 같음 — 벌점만 이탈도에 붙음
+
+$$\hat{\boldsymbol\beta} = \arg\min
+\Bigl\{ -\tfrac{1}{n}\ell(\boldsymbol\beta) + \lambda P(\boldsymbol\beta) \Bigr\}$$
+
+::: {.callout-note}
+## 다음 장으로
+- 지금까지는 **개체 수준 유전형**이 손에 있다고 가정했음
+- 실제 GWAS는 대부분 **요약통계만** 공개됨 (개인정보 때문)
+- 5-III에서는 요약통계만으로 Lasso를 푸는 법(lassosum)을 직접 구현하고,
+  전통적 C+T 방법과 예측 성능을 비교함
+:::

@@ -1,0 +1,433 @@
+---
+title: "4-I. Logistic Regression: Basic Concepts and Estimation"
+description: "이분형 반응, odds와 logit, odds ratio 해석, 최대가능도 추정 — METABRIC 유방암 코호트"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="4-I. 로지스틱 회귀: 기본 개념과 추정">
+        <meta name="ai-context" content="
+        이 챕터는 로지스틱 회귀의 기본 개념과 추정을 다루며, 실습 자료는 METABRIC 유방암 코호트입니다.
+        반응변수가 0/1일 때 선형회귀를 쓰면 예측확률이 0~1 범위를 벗어나고 등분산 가정도 깨집니다.
+        해법은 확률 p를 logit으로 변환해 X의 선형결합과 연결하는 것입니다.
+        odds = p/(1-p), logit = log(p/(1-p))이고, 역변환은 로지스틱(시그모이드) 함수 p = 1/(1+exp(-z))입니다.
+        가정은 세 가지입니다: logit이 X의 선형결합이라는 선형성, 관측치 독립성, logit 연결함수.
+        오차항이 따로 없다는 점이 선형회귀와 다릅니다. 분산이 평균으로 결정되기 때문입니다.
+        계수 해석의 핵심은 odds ratio입니다. exp(beta_j)는 X_j가 1 증가할 때 odds가 몇 배가 되는지를 뜻합니다.
+        추정은 최대가능도추정(MLE)으로 하며 닫힌 해가 없어 수치적으로 풉니다(IRLS).
+        분석 자료는 5년 유방암 특이 사망(death5)이며 n = 1675, 사건 314건입니다.
+        Nottingham prognostic index 단변량 모형에서 계수는 0.8346, odds ratio는 2.304입니다.
+        ER 양성의 odds ratio는 0.262로 보호적입니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `4-I. (Logistic) Basic Concepts and Estimation.docx`
+- 데이터: `data/metabric.csv`
+:::
+
+::: {.callout-important collapse="true"}
+## 실습 자료 — METABRIC 유방암 코호트
+
+- **실제 자료**임 (Part 3의 GWAS 코호트는 시뮬레이션이었음)
+- METABRIC — 유방암 환자 1904명의 임상 정보 + 유전자 발현
+- Part 4에서 쓰는 변수
+
+| 변수 | 의미 |
+|---|---|
+| `Survival_time`, `Vital_status` | 추적기간(개월), 사망 원인 |
+| `Age_at_diagnosis` | 진단 시 나이 |
+| `Tumour_size` | 종양 크기 (mm) |
+| `Neoplasm_histologic_grade` | 조직학적 등급 1/2/3 |
+| `Lymph_nodes_examined_positive` | 양성 림프절 개수 |
+| `ER_status`, `HER2_status` | 호르몬수용체·HER2 상태 |
+| `Chemotherapy`, `Radiotherapy` | 치료 여부 |
+| `Nottingham_prognostic_index` | NPI — 크기·등급·림프절을 합친 예후지수 |
+| `ESR1`, `ERBB2`, `TP53`, … | 유전자 발현 (log2 강도) |
+
+- 반응변수는 **5년 유방암 특이 사망** — 아래 §2에서 정의
+:::
+
+```{r}
+#| label: setup
+#| include: false
+mb <- read.csv("data/metabric.csv", check.names = FALSE)
+keep <- (mb$Survival_time >= 60) |
+  (mb$Vital_status == "Died of Disease" & mb$Survival_time < 60)
+keep[is.na(keep)] <- FALSE
+d <- mb[keep, ]
+d$death5 <- as.integer(d$Vital_status == "Died of Disease" &
+                         d$Survival_time < 60)
+vars <- c("death5", "Age_at_diagnosis", "Tumour_size",
+          "Neoplasm_histologic_grade", "Lymph_nodes_examined_positive",
+          "ER_status", "HER2_status", "Chemotherapy",
+          "Nottingham_prognostic_index", "ESR1", "ERBB2", "TP53")
+bc <- na.omit(d[, c("Patient_ID", vars)])
+bc$grade <- factor(bc$Neoplasm_histologic_grade)
+bc$nodes <- bc$Lymph_nodes_examined_positive
+bc$ER    <- factor(bc$ER_status, levels = c("Negative", "Positive"))
+bc$chemo <- factor(bc$Chemotherapy, levels = c("NO", "YES"))
+```
+
+## 1. Introduction
+
+### 1.1 Yes/No 문제에 선형회귀를 쓸 수 있는가
+
+- 반응변수가 0/1일 때 그냥 `lm()`을 쓰면 무엇이 잘못되나
+
+```{r}
+#| label: lm-fails
+#| fig-cap: "0/1 반응에 선형회귀를 적용하면"
+bad <- lm(death5 ~ Nottingham_prognostic_index, data = bc)
+range(fitted(bad))
+sum(fitted(bad) < 0)                     # 음수 확률이 나온 관측치
+```
+
+```{r}
+#| label: lm-fails-plot
+#| fig-cap: "선형 적합 vs 로지스틱 적합"
+plot(bc$Nottingham_prognostic_index, jitter(bc$death5, 0.1),
+     pch = 20, cex = 0.3, col = "#999999",
+     xlab = "Nottingham prognostic index", ylab = "5년 사망 (0/1)")
+abline(bad, col = "#c44e52", lwd = 2)
+abline(h = c(0, 1), lty = 3)
+g1 <- glm(death5 ~ Nottingham_prognostic_index,
+          family = binomial, data = bc)
+xs <- seq(1, 6.5, length.out = 100)
+lines(xs, predict(g1, data.frame(Nottingham_prognostic_index = xs),
+                  type = "response"), col = "#4c72b0", lwd = 2)
+legend("topleft", bty = "n", lwd = 2, col = c("#c44e52", "#4c72b0"),
+       legend = c("linear", "logistic"))
+```
+
+| 문제 | 내용 |
+|---|---|
+| 범위 위반 | 예측 확률이 0 미만·1 초과로 나옴 (여기서는 100명이 음수) |
+| 등분산 위배 | $Y \sim \mathrm{Bernoulli}(p)$이면 $V(Y) = p(1-p)$ — 분산이 평균에 딸려 감 |
+| 정규성 위배 | 잔차가 두 덩어리로만 나옴 |
+| 선형성 위배 | 확률은 양 끝에서 포화됨 (0과 1에 눌림) → S자 곡선이 자연스러움 |
+
+### 1.2 Odds와 logit
+
+$$\text{odds} = \frac{p}{1-p}, \qquad
+\text{logit}(p) = \log\frac{p}{1-p}$$
+
+| $p$ | odds | logit |
+|---|---|---|
+| 0.1 | 1/9 = 0.111 | -2.20 |
+| 0.5 | 1 | 0 |
+| 0.9 | 9 | 2.20 |
+
+- odds — "$Y=0$일 확률 대비 $Y=1$일 확률"
+- logit — odds에 로그를 씌운 것. 정의역 $(0,1)$을 $(-\infty, \infty)$로 **펴 줌**
+- → 펴 놓은 축 위에서는 선형모형을 쓸 수 있음
+
+### 1.3 모형
+
+$$\text{logit}\{p(\mathbf{x})\} = \log\frac{p(\mathbf{x})}{1-p(\mathbf{x})}
+= \beta_0 + \beta_1 x_1 + \cdots + \beta_p x_p = z$$
+
+- 역변환 = **로지스틱(시그모이드) 함수**
+
+$$p(\mathbf{x}) = \frac{e^{z}}{1 + e^{z}} = \frac{1}{1 + e^{-z}}$$
+
+```{r}
+#| label: sigmoid
+#| fig-cap: "로지스틱 곡선 — 기울기 beta가 클수록 가파름"
+z <- seq(-6, 6, length.out = 200)
+plot(z, 1 / (1 + exp(-z)), type = "l", lwd = 2, col = "#4c72b0",
+     xlab = "z = linear predictor", ylab = "p")
+lines(z, 1 / (1 + exp(-0.5 * z)), lwd = 2, col = "#dd8452")
+lines(z, 1 / (1 + exp(-3 * z)), lwd = 2, col = "#55a868")
+abline(h = c(0, 0.5, 1), lty = 3)
+legend("topleft", bty = "n", lwd = 2,
+       col = c("#dd8452", "#4c72b0", "#55a868"),
+       legend = c("slope 0.5", "slope 1", "slope 3"))
+```
+
+::: {.callout-warning}
+## 오차항이 없다
+- 선형회귀: $Y = \mathbf{x}^T\boldsymbol\beta + \varepsilon$ — 평균과 분산이 **따로**
+- 로지스틱: $Y \sim \mathrm{Bernoulli}(p(\mathbf{x}))$ — 분산이 $p(1-p)$로 **평균에 의해 결정됨**
+- → 따로 더할 오차항이 없음. $\sigma^2$이라는 모수도 없음
+- 이 때문에 "과산포(overdispersion)"라는 별도의 문제가 생김 (4-II, 4-V)
+:::
+
+### 1.4 가정
+
+| 가정 | 내용 |
+|---|---|
+| Linearity | $g\{p(\mathbf{x})\} = \beta_0 + \beta_1x_1 + \cdots + \beta_px_p$ |
+| Independence | $Y_1, \ldots, Y_n$이 서로 독립 |
+| Link function | $g(p) = \log\{p/(1-p)\}$ — logit |
+
+- 선형성은 **$Y$와 $X$** 사이가 아니라 **logit과 $X$** 사이에 요구됨
+- 등분산·정규성 가정은 없음 (분포가 이미 베르누이로 정해져 있으므로)
+
+## 2. Data Examples
+
+### 2.1 반응변수 정의
+
+- METABRIC은 추적기간이 환자마다 다름 → 그냥 "사망 여부"로 쓰면 안 됨
+- 5년(60개월) 시점의 **유방암 특이 사망**으로 정의
+
+```{r}
+#| label: define-y
+mb <- read.csv("data/metabric.csv", check.names = FALSE)
+table(mb$Vital_status, useNA = "ifany")
+
+## 60개월 이상 추적되었거나, 60개월 이내 유방암으로 사망한 환자만
+keep <- (mb$Survival_time >= 60) |
+  (mb$Vital_status == "Died of Disease" & mb$Survival_time < 60)
+keep[is.na(keep)] <- FALSE
+d <- mb[keep, ]
+d$death5 <- as.integer(d$Vital_status == "Died of Disease" &
+                         d$Survival_time < 60)
+c(kept = nrow(d), events = sum(d$death5))
+```
+
+::: {.callout-warning}
+## 왜 이렇게 자르는가
+- **60개월 전에 중도절단된 환자를 빼는 이유** — 5년 시점의 결과를 알 수 없음
+- **다른 원인으로 사망한 환자를 사건으로 세지 않는 이유** — 경쟁위험(competing risk)
+  - 유방암으로 죽은 것과 다른 병으로 죽은 것은 다른 사건임
+- 이렇게 이분형으로 바꾸면 **시간 정보를 버리게 됨**
+  - 정석은 생존분석(Cox 비례위험모형)
+  - 이 장에서는 로지스틱 회귀를 배우는 것이 목적이므로 이분화해서 씀
+:::
+
+```{r}
+#| label: complete-case
+vars <- c("death5", "Age_at_diagnosis", "Tumour_size",
+          "Neoplasm_histologic_grade", "Lymph_nodes_examined_positive",
+          "ER_status", "HER2_status", "Chemotherapy",
+          "Nottingham_prognostic_index", "ESR1", "ERBB2", "TP53")
+bc <- na.omit(d[, c("Patient_ID", vars)])
+bc$grade <- factor(bc$Neoplasm_histologic_grade)
+bc$nodes <- bc$Lymph_nodes_examined_positive
+bc$ER    <- factor(bc$ER_status, levels = c("Negative", "Positive"))
+bc$chemo <- factor(bc$Chemotherapy, levels = c("NO", "YES"))
+c(n = nrow(bc), events = sum(bc$death5),
+  rate = mean(bc$death5))
+```
+
+### 2.2 logit으로 바꾸면 선형이 되는가
+
+- 원자료의 흡연 예제와 같은 확인 방법
+- 연속형 $X$를 구간으로 나눠 **경험적 logit**을 계산해 그려 봄
+
+$$\widehat{\text{logit}}_k = \log\frac{y_k + 0.5}{n_k - y_k + 0.5}$$
+
+- 0.5를 더하는 이유: 어떤 구간에서 사건이 0건이면 로그가 발산하므로
+
+```{r}
+#| label: empirical-logit
+b  <- cut(bc$Nottingham_prognostic_index,
+          breaks = quantile(bc$Nottingham_prognostic_index,
+                            seq(0, 1, 0.1)), include.lowest = TRUE)
+tb <- data.frame(
+  x     = tapply(bc$Nottingham_prognostic_index, b, mean),
+  n     = tapply(bc$death5, b, length),
+  y     = tapply(bc$death5, b, sum))
+tb$p     <- tb$y / tb$n
+tb$logit <- log((tb$y + 0.5) / (tb$n - tb$y + 0.5))
+round(tb, 3)
+```
+
+```{r}
+#| label: empirical-logit-plot
+#| fig-cap: "확률 척도 vs logit 척도 — 오른쪽이 직선에 가까움"
+#| fig-width: 8
+#| fig-height: 4
+op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1))
+plot(tb$x, tb$p, pch = 19, col = "#4c72b0", xlab = "NPI",
+     ylab = "관측 사망률", main = "p 척도")
+plot(tb$x, tb$logit, pch = 19, col = "#4c72b0", xlab = "NPI",
+     ylab = "경험적 logit", main = "logit 척도")
+abline(lm(tb$logit ~ tb$x), col = "red", lwd = 2)
+par(op)
+```
+
+- logit 척도에서 거의 직선 → 선형성 가정이 그럴듯함
+
+## 3. Model Description and Estimation
+
+### 3.1 Odds ratio — 계수를 읽는 법
+
+- $X_j$가 $a$에서 $a+1$로 1 증가할 때
+
+$$\frac{\text{odds}(X_j = a+1)}{\text{odds}(X_j = a)}
+= \frac{\exp\{\beta_0 + \cdots + \beta_j(a+1) + \cdots\}}
+       {\exp\{\beta_0 + \cdots + \beta_j a + \cdots\}}
+= e^{\beta_j}$$
+
+| 값 | 해석 |
+|---|---|
+| $e^{\beta_j} = 1$ | 효과 없음 ($\beta_j = 0$) |
+| $e^{\beta_j} > 1$ | odds 증가 — 위험 요인 |
+| $e^{\beta_j} < 1$ | odds 감소 — 보호 요인 |
+
+::: {.callout-warning}
+## odds ratio는 risk ratio가 아니다
+- odds ratio $= 2$는 "확률이 2배"가 아님
+- 사건이 드물 때만 ($p$가 작을 때) 둘이 비슷해짐
+- 예: $p$가 0.1 → 0.2로 갈 때 risk ratio 2.0, odds ratio 2.25
+- $p$가 0.4 → 0.8로 갈 때 risk ratio 2.0, odds ratio 6.0
+:::
+
+### 3.2 최대가능도추정
+
+- 관측치 하나의 가능도
+
+$$L_i = p_i^{y_i}(1 - p_i)^{1 - y_i}$$
+
+- 독립이므로 전체 가능도는 곱
+
+$$L(\boldsymbol\beta) = \prod_{i=1}^{n} p_i^{y_i}(1-p_i)^{1-y_i}$$
+
+- 로그가능도 (곱 → 합)
+
+$$\ell(\boldsymbol\beta) = \sum_{i=1}^{n}
+\bigl\{ y_i \log p_i + (1-y_i)\log(1-p_i) \bigr\}
+= \sum_{i=1}^{n} \bigl\{ y_i z_i - \log(1 + e^{z_i}) \bigr\}$$
+
+- $z_i = \mathbf{x}_i^T\boldsymbol\beta$
+- $\partial\ell/\partial\beta_j = 0$인 방정식이 $p+1$개, 미지수도 $p+1$개
+
+$$\sum_{i=1}^{n} x_{ij}\,(y_i - p_i) = 0$$
+
+::: {.callout-important}
+- 이 방정식은 **비선형** → 최소제곱처럼 닫힌 해 $(\mathbf{X}^T\mathbf{X})^{-1}\mathbf{X}^T\mathbf{Y}$가 없음
+- 수치적으로 반복해서 품 — IRLS (iteratively reweighted least squares)
+- IRLS의 각 반복은 **가중최소제곱**과 같은 형태 (Part 6-I의 WLS와 이어짐)
+- 그래서 `glm()` 출력에 "Fisher Scoring iterations"가 찍힘
+:::
+
+## 4. Data Example — Model Estimation
+
+### 4.1 단변량 — 연속형 설명변수
+
+```{r}
+#| label: fit-npi
+g1 <- glm(death5 ~ Nottingham_prognostic_index,
+          family = binomial, data = bc)
+summary(g1)
+```
+
+```{r}
+#| label: or-npi
+exp(cbind(OR = coef(g1), confint.default(g1)))
+```
+
+- NPI가 1점 오르면 5년 사망 odds가 **2.30배**
+- 95% 신뢰구간 (2.02, 2.63) — 1을 포함하지 않음
+
+### 4.2 단변량 — 이분형 설명변수
+
+```{r}
+#| label: fit-er
+table(bc$ER, bc$death5)
+g2 <- glm(death5 ~ ER, family = binomial, data = bc)
+round(summary(g2)$coef, 4)
+exp(coef(g2)[2])
+```
+
+```{r}
+#| label: or-2x2
+## 2x2 표에서 직접 계산한 odds ratio와 비교
+tt <- table(bc$ER, bc$death5)
+odds_neg <- tt["Negative", "1"] / tt["Negative", "0"]
+odds_pos <- tt["Positive", "1"] / tt["Positive", "0"]
+c(odds_neg = odds_neg, odds_pos = odds_pos,
+  OR = odds_pos / odds_neg, from_glm = unname(exp(coef(g2)[2])))
+```
+
+::: {.callout-important}
+- ER 음성의 odds 0.576, ER 양성의 odds 0.151
+- odds ratio = 0.151 / 0.576 = **0.262**
+- → ER 양성 환자의 5년 사망 odds는 음성의 26.2% (약 1/3.8)
+- 설명변수가 이분형 하나뿐이면 **로지스틱 회귀 = 2×2 표의 odds ratio**
+:::
+
+### 4.3 MLE가 정말 로그가능도를 최대화하는가
+
+```{r}
+#| label: mle-by-hand
+X <- model.matrix(~ Nottingham_prognostic_index, data = bc)
+y <- bc$death5
+
+negll <- function(b) {
+  z <- as.numeric(X %*% b)
+  -sum(y * z - log(1 + exp(z)))
+}
+o <- optim(c(0, 0), negll, method = "BFGS")
+
+rbind(optim = o$par, glm = coef(g1))
+c(negll_optim = o$value, negll_glm = -as.numeric(logLik(g1)))
+```
+
+- 수치최적화 결과가 `glm()` 계수와 소수점 아래까지 일치
+
+```{r}
+#| label: score-eq
+## 점수방정식 sum(x_ij (y_i - p_i)) = 0 이 성립하는지
+p <- fitted(g1)
+round(as.numeric(t(X) %*% (y - p)), 8)
+```
+
+- 절편에 대한 식: $\sum(y_i - \hat p_i) = 0$ → **적합확률의 합이 사건 수와 같음**
+
+```{r}
+#| label: score-check
+c(sum_fitted = sum(p), n_events = sum(y))
+```
+
+### 4.4 다변량 모형
+
+```{r}
+#| label: fit-multi
+g <- glm(death5 ~ Age_at_diagnosis + Tumour_size + grade + nodes +
+           ER + HER2_status, family = binomial, data = bc)
+summary(g)
+```
+
+```{r}
+#| label: or-multi
+round(exp(cbind(OR = coef(g), confint.default(g))), 3)
+```
+
+| 변수 | OR | 95% CI | 해석 |
+|---|---|---|---|
+| `Tumour_size` (1 mm) | 1.022 | (1.013, 1.031) | 크기 10 mm당 약 1.24배 |
+| `grade3` (vs 1) | 2.220 | (1.143, 4.311) | 고등급 |
+| `nodes` (1개) | 1.112 | (1.079, 1.147) | 림프절 1개당 11% 증가 |
+| `ER` 양성 | 0.372 | (0.270, 0.511) | 보호적 |
+| `HER2` 양성 | 1.511 | (1.052, 2.171) | 위험 |
+| `Age` (1세) | 1.008 | (0.997, 1.019) | 유의하지 않음 |
+
+::: {.callout-tip}
+## 연속형 변수의 OR 단위 바꾸기
+- $X_j$가 $c$만큼 변할 때의 odds ratio는 $e^{c\beta_j}$
+- 종양 크기 10 mm 증가: $e^{10 \times 0.0219} = 1.245$
+:::
+
+```{r}
+#| label: or-scaled
+c(per_1mm = exp(coef(g)["Tumour_size"]),
+  per_10mm = exp(10 * coef(g)["Tumour_size"]))
+```
+
+::: {.callout-warning}
+- 단변량에서 유의하던 나이가 다변량에서는 유의하지 않음
+- Part 3에서 본 marginal과 conditional의 차이가 여기서도 그대로 나타남
+- 다음 장에서 이 문제를 **부호가 뒤집히는 사례**(`ERBB2`)로 다시 봄
+:::
+
+::: {.callout-note}
+## 다음 장으로
+- 이 장은 "계수를 어떻게 얻고 어떻게 읽는가"까지
+- 4-II에서는 **추론**(Wald 검정, 가능도비 검정), **적합도 평가**, **분류**를 다룸
+:::

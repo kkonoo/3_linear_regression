@@ -1,0 +1,591 @@
+---
+title: "3-III. Multiple Linear Regression: Diagnostics and Multicollinearity"
+description: "가정 진단, 모형 평가, 다중공선성과 VIF — GWAS 코호트 실습"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="3-III. 다중선형회귀: 진단과 다중공선성">
+        <meta name="ai-context" content="
+        이 챕터는 다중선형회귀의 진단과 평가를 다루며, 실습 자료는 GWAS 코호트(KNU-Lipid, n=1500)입니다.
+        네 가지 가정(선형성, 등분산, 독립성, 정규성)을 잔차로 점검합니다.
+        오차(error)는 관측할 수 없고 잔차(residual)만 관측되며, 잔차는 hat matrix 때문에 등분산이 아니므로
+        표준화잔차(standardized residual)를 씁니다. hat matrix H = X(X'X)^(-1)X'는 멱등행렬이고
+        대각합은 p+1이며, 대각원소 h_ii가 i번째 관측치의 leverage입니다.
+        영향점은 Cook's distance로 찾습니다. 이 자료에서는 가족성 고콜레스테롤혈증(FH) 보인자 6명이
+        Cook's distance 상위 6개로 잡히고, 이들을 빼면 SNP 효과 추정치가 0.326에서 0.253으로 내려갑니다.
+        모형 평가는 결정계수 R^2와 수정 R^2, 그리고 전체·부분 F-검정으로 합니다.
+        다중공선성은 설명변수끼리 강하게 상관될 때 생기며, GWAS에서는 연관불평형(LD)이 곧 다중공선성입니다.
+        증상은 계수 분산이 커지고 전체 F는 유의한데 개별 t는 유의하지 않은 것입니다.
+        진단 지표는 분산팽창인자 VIF = 1/(1-R_j^2)이며 보통 10을 기준으로 봅니다.
+        이 자료에서 LD로 묶인 SNP 3개를 함께 넣으면 VIF가 11.6까지 올라가고,
+        각각 단독으로는 p가 1e-16 이하인 SNP들이 함께 넣으면 p = 0.92, 0.99로 바뀝니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `3-III. (Multiple) Model Diagnostics, Evaluation and Multicolinearity.docx` · 수식 28 / 그림 10
+- 데이터: `data/gwas_cohort.csv`
+- 생성 스크립트: `data-raw/simulate_cohort.R`
+:::
+
+::: {.callout-important collapse="true"}
+## 실습 자료 — KNU-Lipid 코호트 (1-I에서 소개, 복습)
+
+- 가상의 유전체 코호트. 참값을 알고 있으므로 **추정이 맞았는지 채점할 수 있음**
+- $n = 1500$ (Group1 900명 + Group2 600명), 반응변수는 LDL 콜레스테롤 (mmol/L)
+- 유전형은 **0/1/2** — 위험 대립유전자 개수 (가법 코딩, additive coding)
+
+| 변수 | 의미 | 참값 |
+|---|---|---|
+| `ldl` | LDL 콜레스테롤 (mmol/L) | — |
+| `snp_LDLR` | 인과 SNP | $\beta = 0.28$ |
+| `snp_LD1`, `snp_LD2` | `snp_LDLR`과 **LD**로 묶인 이웃 SNP | 직접 효과 0 |
+| `snp_AIM` | 집단 간 빈도가 크게 다른 조상정보 마커 | $\beta = 0$ |
+| `snp_N1`~`snp_N6` | 귀무 SNP | $\beta = 0$ |
+| `age`, `sex`, `bmi` | 공변량 | 0.013 / 0.33 / 0.042 |
+| `pop` | 집단 (Group1/Group2) | 0.52 |
+| `PC1`~`PC4` | 조상정보 마커 200개의 주성분 | — |
+| `fh_carrier` | 가족성 고콜레스테롤혈증 보인자 | 6명, LDL +4.2~5.8 |
+| `disease` | 이분형 형질 (Part 4에서 사용) | — |
+
+- 이 자료는 Part 1~5에서 계속 씀
+- 세 가지 함정을 일부러 심어 둠
+  - **영향점** — FH 보인자 6명 (이 장 §2)
+  - **다중공선성** — LD 블록 (이 장 §4)
+  - **교란** — 집단층화에 의한 가짜 연관 (다음 장)
+:::
+
+```{r}
+#| label: setup
+#| include: false
+gw <- read.csv("data/gwas_cohort.csv")
+gw$pop <- factor(gw$pop)
+```
+
+## 1. Assumptions and Diagnostics
+
+### 1.1 네 가지 가정
+
+- 모형
+
+$$\mathbf{Y} = \mathbf{X}\boldsymbol\beta + \boldsymbol\varepsilon$$
+
+| 가정 | 내용 | 수식 |
+|---|---|---|
+| Linearity | $Y$는 $X$들의 선형결합 | $E(Y\mid \mathbf{x}) = \mathbf{x}^T\boldsymbol\beta$ |
+| Constant variance | 모든 $X$에서 오차분산이 같음 | $V(\varepsilon_i) = \sigma^2$ |
+| Independence | 오차끼리 독립 | $\mathrm{Cov}(\varepsilon_i, \varepsilon_j) = 0$ |
+| Normality | 오차가 정규분포 | $\varepsilon_i \sim N(0, \sigma^2)$ |
+
+::: {.callout-warning}
+- 등분산 가정은 **오차**에 대한 것
+- 오차분산은 모든 $X$에서 같지만, 그 추정량인 **잔차의 분산은 $X$에 따라 다름**
+- → 잔차를 그대로 보면 안 되고 표준화해야 함 (§1.2)
+:::
+
+### 1.2 오차와 잔차의 차이
+
+#### Error (관측 불가)
+
+$$E(\varepsilon_i) = 0, \qquad V(\boldsymbol\varepsilon) = \sigma^2 \mathbf{I}$$
+
+- 가정에 의해 평균 0, 분산 일정, 서로 독립
+
+#### Hat matrix
+
+$$\hat{\mathbf{Y}} = \mathbf{X}\hat{\boldsymbol\beta}
+= \mathbf{X}(\mathbf{X}^T\mathbf{X})^{-1}\mathbf{X}^T\mathbf{Y}
+= \mathbf{H}\mathbf{Y}$$
+
+- $\mathbf{H}$ = hat matrix (= projection matrix, influence matrix)
+  - $\mathbf{Y}$를 $\mathbf{X}$가 만드는 공간으로 **사영**하는 행렬
+  - 멱등(idempotent): $\mathbf{H}\mathbf{H} = \mathbf{H}$ → 고유값은 0 또는 1
+  - $\mathrm{tr}(\mathbf{H}) = p+1$ (= 고유값 1의 개수 = 모수 개수)
+- $\mathbf{I} - \mathbf{H}$ = residual maker matrix — $\mathbf{Y}$를 잔차로 만듦
+- 대각원소 $h_{ii}$ = $i$번째 관측치의 **leverage**
+  - $\sum_i h_{ii} = p+1$ → 평균 leverage는 $(p+1)/n$
+
+#### Residual (관측 가능)
+
+$$\hat{\boldsymbol\varepsilon} = \mathbf{Y} - \hat{\mathbf{Y}}
+= (\mathbf{I} - \mathbf{H})\mathbf{Y}$$
+
+- 평균
+
+$$E(\hat{\boldsymbol\varepsilon}) = (\mathbf{I}-\mathbf{H})\mathbf{X}\boldsymbol\beta = \mathbf{0}$$
+
+- 분산
+
+$$V(\hat{\boldsymbol\varepsilon}) = (\mathbf{I}-\mathbf{H})\,\sigma^2\mathbf{I}\,(\mathbf{I}-\mathbf{H})^T
+= \sigma^2(\mathbf{I} - \mathbf{H})$$
+
+- → $V(\hat\varepsilon_i) = \sigma^2(1 - h_{ii})$ — **관측치마다 다름**
+
+#### Standardized residual
+
+$$r_i = \frac{\hat\varepsilon_i}{\hat\sigma\sqrt{1 - h_{ii}}}$$
+
+- 분산이 1이 되도록 표준화 → 서로 비교 가능
+- 대략 $|r_i| > 2\sim3$이면 이상치 후보
+
+```{r}
+#| label: hat-check
+## hat matrix의 성질을 직접 확인
+m1 <- lm(ldl ~ snp_LDLR + age + sex + bmi, data = gw)
+X <- model.matrix(m1)
+H <- X %*% solve(t(X) %*% X) %*% t(X)
+
+c(idempotent = max(abs(H %*% H - H)),      # 0이어야 함
+  trace      = sum(diag(H)),               # p+1 = 5
+  mean_lev   = mean(diag(H)),              # (p+1)/n
+  match_R    = max(abs(diag(H) - hatvalues(m1))))
+```
+
+```{r}
+#| label: rstd-check
+## 표준화잔차도 공식대로 계산되는지 확인
+s  <- summary(m1)$sigma
+h  <- hatvalues(m1)
+r  <- residuals(m1) / (s * sqrt(1 - h))
+max(abs(r - rstandard(m1)))
+```
+
+### 1.3 진단 방법
+
+| 가정 | 무엇을 그리나 | 정상이면 |
+|---|---|---|
+| Linearity | 각 $X_j$ vs. 잔차 | 아무 패턴 없음 |
+| Constant variance | 적합값 $\hat Y$ vs. 잔차 | 폭이 일정한 띠 |
+| Independence | 관측 순서·공간·시간 vs. 잔차 | 아무 패턴 없음 |
+| Normality | 잔차의 히스토그램, QQ-plot | 종 모양, 직선 |
+
+- 곡선이 보이면 → 선형성 위배 → 변수 변환
+- 깔때기 모양이면 → 등분산 위배 → $Y$ 변환 또는 WLS (Part 6-I)
+- QQ-plot 양끝이 들리면 → 두꺼운 꼬리 → 이상치 확인
+
+### 1.4 적합 개선
+
+#### 설명변수 변환
+
+- $X$와 $Y$가 곡선 관계면 $X^2$, $\log X$, $1/X$ 등을 추가
+- 변환한 항을 넣어도 **계수에 대해서는 여전히 선형** → 같은 최소제곱을 씀
+
+$$Y = \beta_0 + \beta_1 x + \beta_2 x^2 + \varepsilon$$
+
+#### 이상치의 세 종류
+
+| 종류 | 정의 | 지표 |
+|---|---|---|
+| Outlier | $Y$가 예측에서 크게 벗어남 | 표준화잔차 $\lvert r_i\rvert$ |
+| Leverage point | $X$가 다른 관측치와 크게 다름 | $h_{ii}$ |
+| Influential point | 그 점을 빼면 **적합이 크게 바뀜** | Cook's distance |
+
+::: {.callout-tip}
+- leverage가 높아도 회귀선 위에 있으면 영향은 없음
+- 잔차가 커도 $X$가 중앙이면 영향은 작음
+- → **둘이 겹칠 때** 영향점이 됨
+:::
+
+#### Cook's distance
+
+$$D_i = \frac{\sum_{j=1}^{n}\bigl(\hat Y_j - \hat Y_{j(i)}\bigr)^2}{(p+1)\,\hat\sigma^2}$$
+
+- $\hat Y_{j(i)}$ = $i$번째 관측치를 **빼고** 적합한 뒤의 예측값
+- 해석: "이 한 점을 빼면 적합값 전체가 얼마나 움직이는가"
+- 간편식
+
+$$D_i = \frac{r_i^2}{p+1}\cdot\frac{h_{ii}}{1-h_{ii}}$$
+
+- → 이상치 정도($r_i$)와 leverage($h_{ii}$)의 **곱**
+- 관행적 기준: $D_i > 4/n$, 또는 다른 점들과 자릿수가 다르면 확인
+
+## 2. Data Example I — Diagnostics
+
+### 2.1 자료 훑어보기
+
+```{r}
+#| label: load-gwas
+gw <- read.csv("data/gwas_cohort.csv")
+gw$pop <- factor(gw$pop)
+dim(gw)
+table(gw$snp_LDLR)                       # 유전형 0/1/2 개수
+round(mean(gw$snp_LDLR) / 2, 3)          # 대립유전자 빈도 (MAF)
+```
+
+```{r}
+#| label: scatter-matrix
+#| fig-cap: "Scatter plot matrix — Y와 여러 X의 관계를 한 번에"
+pairs(gw[, c("ldl", "snp_LDLR", "age", "sex", "bmi")],
+      pch = 20, cex = 0.4, col = "#4c72b0",
+      main = "KNU-Lipid cohort")
+```
+
+::: {.callout-note}
+- 유전형과 성별은 값이 몇 개뿐이라 산점도가 **세로줄**로 보임
+- 이 경우 선형성은 산점도보다 **집단별 평균**으로 보는 편이 낫다
+:::
+
+```{r}
+#| label: geno-means
+round(tapply(gw$ldl, gw$snp_LDLR, mean), 3)
+```
+
+- 위험 대립유전자가 하나 늘 때마다 평균 LDL이 계단식으로 올라감 → 가법 모형이 그럴듯함
+- 다만 증가폭이 0.240 / 0.592로 고르지 않음 → 뒤(§2.4)에서 이유가 드러남
+
+### 2.2 모형 적합
+
+```{r}
+#| label: fit-m1
+m1 <- lm(ldl ~ snp_LDLR + age + sex + bmi, data = gw)
+summary(m1)
+```
+
+| 항목 | 값 |
+|---|---|
+| $\hat\beta_{snp}$ | 0.3257 (se 0.0293, $t = 11.12$) |
+| $\hat\sigma$ | 0.7124, df $= 1495$ |
+| $R^2$ | 0.1799 |
+| 전체 $F$ | 82.0 (4, 1495) |
+
+- 참값은 $\beta_{snp} = 0.28$ — 추정치가 **위로 치우쳐 있음**. 왜인지는 잔차가 말해 줌
+
+### 2.3 잔차 분석
+
+```{r}
+#| label: resid-plots
+#| fig-cap: "진단 플롯 4종"
+#| fig-width: 9
+#| fig-height: 7
+op <- par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+fits <- fitted(m1); res <- residuals(m1)
+
+plot(fits, res, pch = 20, cex = 0.5, xlab = "Fitted values",
+     ylab = "Residuals", main = "등분산 · 독립성")
+abline(h = 0, col = "red")
+
+plot(gw$bmi, res, pch = 20, cex = 0.5, xlab = "BMI",
+     ylab = "Residuals", main = "선형성")
+abline(h = 0, col = "red")
+
+hist(res, nclass = 40, col = "orange", xlab = "Residuals",
+     main = "정규성 — 히스토그램")
+
+qqnorm(res, pch = 20, cex = 0.5, main = "정규성 — QQ plot")
+qqline(res, col = "red")
+par(op)
+```
+
+- 적합값 vs 잔차: 대체로 폭이 일정하나 **위쪽으로만 튀는 점 몇 개**가 보임
+- 히스토그램·QQ-plot: 오른쪽 꼬리가 길다 → 정규성 위배의 원인은 소수의 관측치
+
+```{r}
+#| label: rstd-summary
+r <- rstandard(m1)
+summary(r)
+sum(abs(r) > 3)                          # |표준화잔차| > 3
+```
+
+- 1-II(단순회귀)에서 표준화잔차로 표시해 둔 6명이 다중회귀에서도 그대로 튐
+- 이상치인 것은 알았으니 이제 질문은 **회귀선을 얼마나 끌고 가는가** → Cook's distance
+
+### 2.4 영향점 — Cook's distance
+
+```{r}
+#| label: cook-plot
+#| fig-cap: "Cook's distance — 여섯 점이 확연히 떨어져 있음"
+ck <- cooks.distance(m1)
+plot(ck, type = "h", lwd = 2, col = "red",
+     ylab = "Cook's distance", xlab = "Observation")
+abline(h = 4 / nrow(gw), lty = 2)
+```
+
+```{r}
+#| label: cook-top
+top <- order(ck, decreasing = TRUE)[1:8]
+data.frame(iid = gw$iid[top], ldl = gw$ldl[top],
+           geno = gw$snp_LDLR[top], cook = round(ck[top], 4),
+           rstd = round(r[top], 2), fh = gw$fh_carrier[top],
+           row.names = NULL)
+```
+
+::: {.callout-important}
+## 진단이 실제로 무엇을 찾아냈나
+- Cook's distance 상위 6개가 **정확히 FH 보인자 6명**
+- 이들은 단일유전자(monogenic) 기전으로 LDL이 4~6 mmol/L 높음
+- 즉 "다유전자 모형이 설명하도록 만들어진 사람들이 아님"
+- 통계적 이상치 = **다른 생물학적 기전**의 신호
+:::
+
+```{r}
+#| label: cook-formula
+## 간편식이 맞는지 확인: D_i = r_i^2/(p+1) * h/(1-h)
+h  <- hatvalues(m1)
+Dm <- r^2 / 5 * h / (1 - h)
+max(abs(Dm - ck))
+```
+
+### 2.5 영향점을 빼면 어떻게 달라지나
+
+```{r}
+#| label: fit-m1b
+gwc <- subset(gw, fh_carrier == 0)       # FH 보인자 6명 제외
+m1b <- lm(ldl ~ snp_LDLR + age + sex + bmi, data = gwc)
+summary(m1b)$coef
+c(sigma = summary(m1b)$sigma, r2 = summary(m1b)$r.squared)
+```
+
+| | 전체 ($n=1500$) | FH 제외 ($n=1494$) | 참값 |
+|---|---|---|---|
+| $\hat\beta_{snp}$ | 0.3257 | **0.2526** | 0.28 |
+| se | 0.0293 | 0.0268 | — |
+| $\hat\sigma$ | 0.7124 | 0.6441 | 0.62 |
+| $R^2$ | 0.1799 | 0.1882 | — |
+
+- 1500명 중 **6명(0.4%)** 때문에 계수가 29% 부풀려져 있었음
+- 제거 후 $\hat\sigma$가 참값 0.62에 가까워짐
+- 이후 분석은 모두 `gwc`(FH 제외)로 진행
+
+```{r}
+#| label: qq-after
+#| fig-cap: "FH 제외 후 QQ plot — 꼬리가 사라짐"
+qqnorm(residuals(m1b), pch = 20, cex = 0.5, main = "")
+qqline(residuals(m1b), col = "red")
+```
+
+::: {.callout-warning}
+- 이상치를 **무조건 지우는 것**은 답이 아님
+- 지운 근거를 댈 수 있어야 함 — 여기서는 "다른 기전"이라는 생물학적 근거가 있었음
+- 실제 GWAS에서도 단일유전자 질환 보인자는 별도로 다루는 것이 표준
+:::
+
+## 3. Model Evaluation
+
+### 3.1 결정계수
+
+$$SST = SSReg + SSE, \qquad
+R^2 = \frac{SSReg}{SST} = 1 - \frac{SSE}{SST}$$
+
+- $R^2$ = $Y$의 전체 변동 중 모형이 설명하는 비율
+- 문제: **변수를 추가하면 $R^2$는 절대 줄지 않음** (쓸모없는 변수라도)
+- 보정
+
+$$R^2_{adj} = 1 - \frac{SSE/(n-p-1)}{SST/(n-1)}$$
+
+- 자유도로 나눈 뒤 비교 → 쓸모없는 변수를 넣으면 **내려감**
+
+```{r}
+#| label: r2-adj
+fs <- c("ldl ~ snp_LDLR",
+        "ldl ~ snp_LDLR + age",
+        "ldl ~ snp_LDLR + age + sex",
+        "ldl ~ snp_LDLR + age + sex + bmi",
+        paste("ldl ~ snp_LDLR + age + sex + bmi +",
+              "snp_N1 + snp_N2 + snp_N3 + snp_N4 + snp_N5 + snp_N6"))
+out <- t(sapply(fs, function(f) {
+  s <- summary(lm(as.formula(f), data = gwc))
+  c(R2 = s$r.squared, adjR2 = s$adj.r.squared)
+}))
+round(out, 4)
+```
+
+::: {.callout-important}
+- 효과가 **참으로 0인** 귀무 SNP 6개를 넣었을 때
+  - $R^2$: 0.1882 → 0.1907 (**올라감**)
+  - $R^2_{adj}$: 0.1861 → 0.1853 (**내려감**)
+- → 변수 개수가 다른 모형을 비교할 때 $R^2$를 쓰면 안 됨
+- Part 5의 변수선택은 이 문제를 본격적으로 다룸
+:::
+
+### 3.2 ANOVA를 이용한 평가 — 전체 F-test
+
+| Source | DF | Sum of Sq | Mean SS | F |
+|---|---|---|---|---|
+| Regression | $p$ | $SSReg$ | $SSReg/p$ | $MSReg/MSE$ |
+| Residual | $n-p-1$ | $SSE$ | $SSE/(n-p-1)$ | |
+| Total | $n-1$ | $SST$ | | |
+
+$$H_0: \beta_1 = \cdots = \beta_p = 0, \qquad
+F = \frac{MSReg}{MSE} \sim F_{p,\,n-p-1}$$
+
+- $SSReg = \sum(\hat Y_i - \bar Y)^2$ — **적합값으로 설명되는 변동**
+- $SSE = \sum(Y_i - \hat Y_i)^2$ — **설명하지 못하는 나머지**
+
+```{r}
+#| label: anova-m1b
+anova(m1b)
+```
+
+```{r}
+#| label: f-manual
+## 전체 F를 제곱합에서 직접 계산
+ss  <- anova(m1b)[["Sum Sq"]]
+sse <- ss[length(ss)]
+ssr <- sum(ss[-length(ss)])
+n <- nrow(gwc); p <- 4
+fstat <- (ssr / p) / (sse / (n - p - 1))
+c(F = fstat, p = 1 - pf(fstat, p, n - p - 1),
+  R2 = ssr / (ssr + sse))
+```
+
+### 3.3 부분 모형의 F-test
+
+$$F_{partial} = \frac{\bigl[SSE_{reduced} - SSE_{full}\bigr]/q}{SSE_{full}/(n-p-q-1)}$$
+
+- 질문: 공변량만 있는 모형에 **SNP를 넣을 가치가 있는가**
+
+```{r}
+#| label: partial-f
+mred <- lm(ldl ~ age + sex + bmi, data = gwc)
+anova(mred, m1b)
+```
+
+- $F = 88.9$, p-value $< 2\times10^{-16}$ → 유의
+- 반대로 귀무 SNP 6개는?
+
+```{r}
+#| label: partial-f-null
+mnull <- lm(ldl ~ snp_LDLR + age + sex + bmi +
+              snp_N1 + snp_N2 + snp_N3 + snp_N4 + snp_N5 + snp_N6,
+            data = gwc)
+anova(m1b, mnull)
+```
+
+- p-value가 크다 → 추가할 가치 없음 (참값과 일치)
+
+## 4. Multicollinearity
+
+### 4.1 GWAS에서의 다중공선성 — 연관불평형(LD)
+
+- 가까이 붙어 있는 SNP들은 **같이 유전됨** → 유전형이 서로 강하게 상관
+- 이것이 연관불평형 (linkage disequilibrium, LD)
+- 회귀의 관점에서 LD는 정확히 **다중공선성**
+
+```{r}
+#| label: ld-cor
+snps <- c("snp_LDLR", "snp_LD1", "snp_LD2", "snp_N1")
+round(cor(gwc[, snps]), 3)
+```
+
+- `snp_LDLR`–`snp_LD1` 상관 0.935, `snp_LDLR`–`snp_LD2` 0.888
+- 귀무 SNP(`snp_N1`)와는 거의 0 → LD는 **국소적**
+
+### 4.2 다중공선성의 증상
+
+| 증상 | 이유 |
+|---|---|
+| $V(\hat\beta_j)$가 매우 커짐 | $\mathbf{X}^T\mathbf{X}$가 거의 특이행렬 → 역행렬이 폭발 |
+| 계수가 불안정 | 자료가 조금만 바뀌어도 추정치가 크게 요동 |
+| 전체 $F$는 유의, 개별 $t$는 비유의 | 설명력을 서로 나눠 가져 어느 하나도 "추가 기여"를 못 함 |
+| 예측 성능 저하 | 계수 분산이 크므로 |
+
+::: {.callout-tip}
+## 왜 F는 유의한데 t는 비유의인가
+- $Y$와 강하게 연관된 $X_1$, 그와 거의 같은 $X_2$, $X_3$
+- 전체 $F$: "셋 중 누군가는 $Y$와 연관 있는가" → 당연히 그렇다
+- 개별 $t$: "다른 둘이 **이미 들어 있을 때** 이 변수가 추가로 설명하는가" → 남은 게 없다
+- 두 검정이 묻는 질문이 다름
+:::
+
+### 4.3 Variance Inflation Factor
+
+$$VIF_j = \frac{1}{1 - R_j^2}$$
+
+- $R_j^2$ = $X_j$를 **나머지 설명변수 전부로 회귀**했을 때의 결정계수
+- 의미: 모든 $X$가 무상관일 때에 비해 $V(\hat\beta_j)$가 몇 배로 커졌는가
+
+| $R_j^2$ | VIF | 해석 |
+|---|---|---|
+| 0 | 1 | 완전 무상관 |
+| 0.5 | 2 | 분산 2배 |
+| 0.9 | 10 | 분산 10배, 표준오차 3.2배 |
+| 0.95 | 20 | 심각 |
+
+- 관행적 기준: $VIF > 10$ (또는 $> 5$)이면 문제
+
+### 4.4 Data Example II — LD 블록을 한꺼번에 넣으면
+
+```{r}
+#| label: single-snp
+## (a) 각 SNP를 하나씩 넣었을 때
+for (s in c("snp_LDLR", "snp_LD1", "snp_LD2")) {
+  f  <- as.formula(paste("ldl ~", s, "+ age + sex + bmi"))
+  co <- summary(lm(f, data = gwc))$coef[s, ]
+  cat(sprintf("%-9s b=%.4f  se=%.4f  t=%6.2f  p=%.2e\n",
+              s, co[1], co[2], co[3], co[4]))
+}
+```
+
+- 셋 다 압도적으로 유의 ($p < 10^{-15}$)
+
+```{r}
+#| label: ld-joint
+## (b) 셋을 한꺼번에 넣으면
+mfull <- lm(ldl ~ snp_LDLR + snp_LD1 + snp_LD2 + age + sex + bmi,
+            data = gwc)
+summary(mfull)
+```
+
+::: {.callout-important}
+## 같은 자료, 정반대의 결론
+
+| SNP | 단독 p-value | 함께 넣었을 때 p-value |
+|---|---|---|
+| `snp_LDLR` | $1.5\times10^{-20}$ | 0.0046 |
+| `snp_LD1` | $5.7\times10^{-18}$ | **0.917** |
+| `snp_LD2` | $1.8\times10^{-16}$ | **0.990** |
+
+- 전체 $F = 57.5$, p-value $< 2\times10^{-16}$ → 모형은 매우 유의
+- 그런데 개별 계수는 거의 다 유의하지 않음 → 교과서적 다중공선성
+:::
+
+```{r}
+#| label: vif-manual
+## VIF를 정의대로 직접 계산
+X <- model.matrix(mfull)[, -1]
+vif <- sapply(colnames(X), function(j) {
+  rest <- setdiff(colnames(X), j)
+  1 / (1 - summary(lm(X[, j] ~ X[, rest]))$r.squared)
+})
+round(vif, 3)
+```
+
+```{r}
+#| label: vif-se
+## VIF는 "표준오차가 몇 배로 커졌나"의 제곱과 같다
+se1 <- summary(lm(ldl ~ snp_LDLR + age + sex + bmi,
+                  data = gwc))$coef["snp_LDLR", "Std. Error"]
+se2 <- summary(mfull)$coef["snp_LDLR", "Std. Error"]
+c(se_alone = se1, se_joint = se2,
+  ratio_sq = (se2 / se1)^2, VIF = unname(vif["snp_LDLR"]))
+```
+
+- $(0.0913/0.0268)^2 = 11.61$, VIF $= 11.61$ → **정확히 일치**
+- 표준오차가 3.4배로 커진 것이 p-value 붕괴의 직접 원인
+
+```{r}
+#| label: ld-partial-f
+## 그래도 "이 LD 블록이 LDL과 연관 있는가"는 답할 수 있다
+anova(lm(ldl ~ age + sex + bmi, data = gwc), mfull)
+```
+
+::: {.callout-important}
+## GWAS 실무의 교훈
+- 다중공선성은 **"어느 SNP가 인과인가"를 답할 수 없게 만드는 것**이지,
+  "이 영역이 연관 있는가"를 답하지 못하게 하는 것이 아님
+- 그래서 GWAS는
+  - SNP를 **하나씩** 검정하고 (marginal), 다중공선성을 피함
+  - 유의한 영역에 대해 별도의 **fine-mapping**으로 인과 변이를 찾음
+  - PRS를 만들 때는 미리 **LD pruning / clumping**으로 대표 SNP만 남김
+- Part 5의 Ridge 회귀가 바로 이 상황(상관된 설명변수)을 위한 도구
+:::
+
+::: {.callout-note}
+## 다음 장으로
+- 이 장의 두 함정(영향점, 다중공선성)은 모두 $X$들 사이의 문제였음
+- 다음 장은 **빠뜨린 변수**가 만드는 문제 — 집단층화에 의한 가짜 연관
+:::

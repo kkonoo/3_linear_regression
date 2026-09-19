@@ -1,0 +1,462 @@
+---
+title: "1-I. Simple Linear Regression: Estimation and Inference"
+description: "단순선형회귀의 최소제곱 추정과 통계적 추론 — GWAS의 단일 SNP 검정"
+author: "Eunji Ha"
+date: today
+format:
+  html:
+    include-in-header:
+      text: |
+        <meta name="ai-title" content="1-I. 단순선형회귀: 추정과 추론">
+        <meta name="ai-context" content="
+        이 챕터는 단순선형회귀(simple linear regression)의 추정과 추론을 다룹니다.
+        모형은 Y_i = beta_0 + beta_1 * X_i + e_i 이며, 오차항에 대해 네 가지를 가정합니다:
+        선형성/평균 0, 등분산, 독립성, 정규성. 모수 beta_0, beta_1은 오차제곱합(SSE)을 최소화하는
+        최소제곱법(least squares)으로 추정하고, sigma^2는 MSE = SSE/(n-2)로 추정합니다.
+        추정량 beta_1-hat은 불편추정량이며 자유도 n-2인 t분포를 따르므로 신뢰구간과 유의성 검정이 가능합니다.
+        예제는 가상의 유전체 코호트 KNU-Lipid(n=1500)입니다. 반응변수는 LDL 콜레스테롤, 설명변수는 SNP 유전형(위험 대립유전자 수 0/1/2)입니다.
+        GWAS에서 SNP 하나를 검정하는 것이 곧 단순선형회귀 한 번입니다.
+        추정 결과 beta_1-hat = 0.3356 (표준오차 0.0311, t = 10.79, p = 3.6e-26), sigma-hat = 0.757입니다.
+        참값은 0.28로 95% 신뢰구간 (0.275, 0.397) 안에 있지만 점추정치가 큰 이유는 1-II와 3-III에서 드러납니다.
+        ">
+---
+
+::: {.callout-note collapse="true"}
+## 원자료
+- `1-I. (Simple) Estimation_and_inference.docx`
+- 원자료의 의료기기 매출 자료(meddcor)를 **GWAS 코호트**로 교체
+- 데이터: `data/gwas_cohort.csv`
+- 생성 스크립트: `data-raw/simulate_cohort.R` (`set.seed(20260918)`)
+:::
+
+::: {.callout-important collapse="true"}
+## 실습 자료 — KNU-Lipid 코호트
+
+- 가상의 유전체 코호트. 참값을 알고 있으므로 **추정이 맞았는지 채점할 수 있음**
+- $n = 1500$ (Group1 900명 + Group2 600명), 반응변수는 LDL 콜레스테롤 (mmol/L)
+- 유전형은 **0/1/2** — 위험 대립유전자 개수 (가법 코딩, additive coding)
+
+| 변수 | 의미 | 참값 |
+|---|---|---|
+| `ldl` | LDL 콜레스테롤 (mmol/L) | — |
+| `snp_LDLR` | 인과 SNP | $\beta = 0.28$ |
+| `snp_LD1`, `snp_LD2` | `snp_LDLR`과 **LD**로 묶인 이웃 SNP | 직접 효과 0 |
+| `snp_AIM` | 집단 간 빈도가 크게 다른 조상정보 마커 | $\beta = 0$ |
+| `snp_N1`~`snp_N6` | 귀무 SNP | $\beta = 0$ |
+| `age`, `sex`, `bmi` | 공변량 | 0.013 / 0.33 / 0.042 |
+| `pop` | 집단 (Group1/Group2) | 0.52 |
+| `PC1`~`PC4` | 조상정보 마커 200개의 주성분 | — |
+| `fh_carrier` | 가족성 고콜레스테롤혈증 보인자 | 6명, LDL +4.2~5.8 |
+| `disease` | 이분형 형질 (Part 4에서 사용) | — |
+
+- 생성 모형 (오차 SD 0.62)
+
+$$\text{ldl} = 2.55 + 0.28\,\text{snp}_{LDLR} + 0.013(\text{age} - 55) + 0.33\,\text{sex}
++ 0.042(\text{bmi} - 24) + 0.52\,\text{Group2} + \varepsilon$$
+
+- 이 자료는 Part 1~5에서 계속 씀. 일부러 심어 둔 함정
+
+| 함정 | 장치 | 드러나는 곳 |
+|---|---|---|
+| 이상치·영향점 | FH 보인자 6명 | 1-II (이상치), 3-III (영향점) |
+| 교란 | BMI와 집단의 상관 | 3-I (marginal vs conditional), 3-II (순차제곱합) |
+| 다중공선성 | LD 블록 | 3-III (VIF) |
+| 가짜 연관 | 집단층화 | 3-IV/V |
+:::
+
+## 1. Basics
+
+### 1.1 이 강의에서 계속 쓸 예제
+
+- 원자료는 경제·정치 예제(구매력평가, 2000년 플로리다 대선)를 씀 → 이 강의는 **생물학 자료**로 교체
+
+| 자료 | 내용 | 쓰이는 곳 |
+|---|---|---|
+| **KNU-Lipid** | 가상 GWAS 코호트 1500명, LDL·유전형·공변량 | Part 1~5 |
+| KNU-Family | 핵가족 300가계, 부모–자녀 LDL | 1-III, 6-II |
+| METABRIC | 실제 유방암 코호트 | 4-I, 4-II |
+| KNU-RNA | 가상 RNA-seq 카운트 | 4-IV, 4-V |
+
+- **GWAS (genome-wide association study)**
+  - 수십만~수백만 개 SNP 각각에 대해 "이 SNP가 형질과 연관되는가"를 검정
+  - SNP 하나의 검정 = **단순선형회귀 한 번** (형질 ~ 유전형)
+  - → 이 장의 내용이 GWAS의 가장 기본 단위
+
+### 1.2 회귀의 변수
+
+| 구분 | 기호 | 성격 |
+|---|---|---|
+| **Response** (dependent) variable | $Y$ | random — 우리의 관심 대상 |
+| **Predicting / explanatory** (independent) variable | $X$ | fixed — 주어진 값으로 취급 |
+
+- $X$를 **fixed**로 본다는 점이 핵심
+- $\hat\beta_1$의 기댓값·분산을 구할 때 $x_i$에 관한 항은 전부 상수로 빠져나감
+- GWAS에서는
+  - $Y$ = 형질 (LDL 콜레스테롤)
+  - $X$ = 유전형 — 위험 대립유전자 개수 0/1/2 (**가법 코딩**)
+  - $\beta_1$ = 위험 대립유전자 **하나당** 형질 변화
+
+### 1.3 General model
+
+$$Y = \beta_0 + \beta_1 X + \varepsilon$$
+
+| 이름 | 모형 |
+|---|---|
+| Simple linear regression | $Y = \beta_0 + \beta_1 x + \varepsilon$ |
+| Multiple linear regression | $Y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \varepsilon$ |
+| Polynomial regression | $Y = \beta_0 + \beta_1 x + \beta_2 x^2 + \varepsilon$ |
+
+::: {.callout-important}
+## "linear"가 무엇에 대해 선형인가
+- $x$가 일차식이든 이차식이든 무관
+- **회귀계수 $\beta$에 대해 선형**이면 linear regression
+- 이차항이 있으면 $x^2$ 자체를 독립적인 predictor로 상정하면 됨
+:::
+
+### 1.4 회귀분석의 목적
+
+- **Prediction** — 새로운 $x$에서 $Y$를 예측
+- **Modeling of relationship** — $X$와 $Y$의 관계를 정량화
+- **Testing for association** — 연관이 통계적으로 유의한지 검정
+
+> *"All models are wrong, but some are useful."* — George Box
+>
+> *"Embrace your data, not your models."* — John Tukey
+
+## 2. Estimation Method
+
+### 2.1 목표와 모형 구조
+
+- 목표: $X$와 $Y$ 사이의 선형 관계, 즉 **선 하나**를 찾는 것
+- 문제: 산점도 위에 그을 수 있는 직선은 무수히 많음
+- → *best line의 기준이 무엇인가?*
+
+- **Data**: $\{(x_1, Y_1), \ldots, (x_n, Y_n)\}$ — 항상 $X$와 $Y$의 pair
+- **Model**: $Y_i = \beta_0 + \beta_1 x_i + \varepsilon_i, \quad i = 1, \ldots, n$
+
+### 2.2 오차에 대한 네 가지 가정
+
+- 가정은 $Y$가 아니라 **오차항 $\varepsilon$에 대한 것**
+
+#### Linearity / Mean zero
+
+$$E(\varepsilon_i) = 0$$
+
+- 오차항의 평균은 0
+- 이것이 곧 $E(Y_i) = \beta_0 + \beta_1 x_i$, 즉 선형성 가정
+
+#### Constant variance
+
+$$\mathrm{Var}(\varepsilon_i) = \sigma^2$$
+
+- 모든 $i$에서 분산이 동일
+- $x_i$는 상수 → 데이터의 분산 = 오차항의 분산
+
+#### Independence
+
+$$\{\varepsilon_1, \ldots, \varepsilon_n\} \ \text{are independent random variables}$$
+
+::: {.callout-warning}
+- 시계열처럼 sequential한 데이터에서 가장 많이 깨지는 가정
+- autocorrelation 주의
+:::
+
+#### Normality
+
+$$\varepsilon_i \sim \text{Normal}$$
+
+- 네 가정을 합치면 $\varepsilon_i \sim N(0, \sigma^2)$
+- 따라서 $Y_i \sim N(\beta_0 + \beta_1 x_i,\ \sigma^2)$
+
+### 2.3 모형의 모수
+
+- 모수는 **true value이므로 영원히 알 수 없음**
+- 오로지 데이터 + 가정으로 추정만 가능
+
+| 모수 | 의미 |
+|---|---|
+| $\beta_0$ | Intercept |
+| $\beta_1$ | Slope |
+| $\sigma^2$ | Variance of deviations |
+
+### 2.4 최소제곱 (least squares)
+
+#### Squared error와 SSE
+
+$$SE = (\text{observed} - \text{estimated})^2, \qquad
+SSE = \sum_{i=1}^{n}\bigl(y_i - (\beta_0 + \beta_1 x_i)\bigr)^2$$
+
+- 이 SSE를 가장 작게 만드는 $\beta_0, \beta_1$을 고르는 것이 최소제곱법
+
+::: {.callout-tip collapse="true"}
+## cf. chi-square와의 관계
+- $\chi^2 = SE / \text{expected}$ 형태
+- 정규분포를 따르는 확률변수 제곱의 합($\sum X^2$), 자유도 = 데이터 개수
+- 회귀에서는 $\hat\varepsilon_i \sim \varepsilon_i \sim N(0, \sigma^2)$ 가정을 씀
+  - normality + zero-mean + 오차분산 = 데이터분산
+- → 잔차제곱합이 카이제곱 분포로 이어짐
+:::
+
+#### 정규방정식과 해
+
+- $SSE$는 $\beta_0, \beta_1$에 대한 **이차식**
+- 최솟값은 미분해서 0이 되는 곳
+
+$$\hat\beta_1 = \frac{S_{xy}}{S_{xx}} = \frac{\sum_{i=1}^n y_i(x_i - \bar x)}{\sum_{i=1}^n (x_i - \bar x)^2},
+\qquad \hat\beta_0 = \bar y - \hat\beta_1 \bar x$$
+
+- $\hat\beta_1$은 $y/x$ 형태라는 직관으로 기억
+- $\hat\beta_0$ 식에서 → **회귀직선은 항상 $(\bar x, \bar y)$를 지남**
+
+#### Fitted value와 residual
+
+$$\hat y_i = \hat\beta_0 + \hat\beta_1 x_i, \qquad
+r_i = \hat\varepsilon_i = y_i - \hat y_i$$
+
+::: {.callout-important}
+- **잔차(residual)는 오차(error)의 추정량**
+- 오차 $\varepsilon_i$는 관측 불가, 우리가 볼 수 있는 것은 잔차뿐
+- → 이후 모든 진단은 잔차로 함
+:::
+
+### 2.5 MSE — 오차분산의 추정량
+
+$$MSE = \frac{\sum_{i=1}^n r_i^2}{n-2} = \frac{SSE}{n-2} = \hat\sigma^2$$
+
+::: {.callout-note}
+## 왜 n-2인가
+- 잔차 $r_i$를 계산하려면 이미 $\hat\beta_0$, $\hat\beta_1$ 두 개를 추정하고 들어가야 하기 때문
+- 표본분산 $s^2 = \sum(z_i - \bar z)^2/(n-1)$과 생긴 것은 비슷, 분모만 $n-2$
+:::
+
+- $\sigma$도 결국 모르는 모수 → 분포를 알아야 함
+- 오차가 정규분포라고 가정했으므로 카이제곱으로 감
+
+$$\hat\sigma^2 = MSE = \frac{\sum \hat\varepsilon_i^2}{n-2} \sim \chi^2_{n-2}$$
+
+- 참고: 표본분산 쪽은 $\dfrac{(n-1)s^2}{\sigma^2} \sim \chi^2_{n-1}$
+  - 진짜 평균 $\mu$ 대신 $\bar z$로 대체 → 자유도 하나 감소
+
+#### 제곱합 분해
+
+$$\underbrace{\sum (y_i - \bar y)^2}_{SST} =
+\underbrace{\sum (\hat y_i - \bar y)^2}_{SSR\ (\text{explained})} +
+\underbrace{\sum (y_i - \hat y_i)^2}_{SSE\ (\text{unexplained})}$$
+
+- 자유도도 같이 쪼개짐: $(n-1) = 1 + (n-2)$
+
+::: {.callout-warning}
+- 책마다 $SSE$와 $SSR$을 **반대로** 정의하는 경우가 있음
+- 이 강의의 정의
+  - $SSR$ = regression이 설명한 부분
+  - $SSE$ = 남은 오차
+:::
+
+### 2.6 회귀계수의 해석
+
+| $\hat\beta_1$ | 해석 |
+|---|---|
+| positive | $x$와 $y$ 사이 **direct relationship** |
+| negative | $x$와 $y$ 사이 **inverse relationship** |
+| 0에 가까움 | 유의한 연관 없음 |
+
+## 3. Data Example I — Estimation
+
+- 자료: KNU-Lipid 코호트 1500명 (자료 소개는 맨 위 상자)
+- 모형: LDL(`ldl`) ~ 유전형(`snp_LDLR`)
+
+```{r}
+#| label: load-gwas
+gw <- read.csv("data/gwas_cohort.csv")
+dim(gw)
+table(gw$snp_LDLR)                       # 유전형 0/1/2 인원
+round(mean(gw$snp_LDLR) / 2, 3)          # 위험 대립유전자 빈도
+```
+
+```{r}
+#| label: fit-slr
+model <- lm(ldl ~ snp_LDLR, data = gw)
+summary(model)
+```
+
+- 추정 결과
+
+$$\hat\beta_0 = 2.9136, \qquad \hat\beta_1 = 0.3356, \qquad \hat\sigma = 0.7571$$
+
+- 적합된 회귀식: $\widehat{ldl} = 2.9136 + 0.3356 \times \text{snp}_{LDLR}$
+- 해석
+  - 위험 대립유전자가 하나 늘 때마다 LDL 평균이 약 **0.34 mmol/L** 증가
+  - $\hat\beta_0$ = 위험 대립유전자가 없는(0개) 사람들의 평균 LDL 추정값
+
+```{r}
+#| label: plot-slr
+#| fig-cap: "유전형과 LDL — 점은 옆으로 흩뜨려 그림(jitter), 빨간 선이 최소제곱 직선, 파란 점이 유전형별 평균"
+set.seed(1)
+plot(jitter(gw$snp_LDLR, 0.6), gw$ldl, pch = 20, cex = 0.5,
+     col = adjustcolor("grey40", 0.5), xaxt = "n",
+     xlab = "snp_LDLR (risk allele count)", ylab = "LDL (mmol/L)")
+axis(1, at = 0:2)
+abline(model, col = "red", lwd = 2)
+points(0:2, tapply(gw$ldl, gw$snp_LDLR, mean), pch = 19,
+       col = "#4c72b0", cex = 1.6)
+```
+
+- $X$가 세 값뿐이라 산점도가 **세로줄 세 개**
+- 회귀직선은 세 유전형 평균(파란 점)을 가장 잘 지나는 직선
+- 위쪽으로 멀리 떨어진 점 몇 개 — 1-II에서 다시 봄
+
+- 공식과 맞는지 직접 계산해서 확인
+
+```{r}
+#| label: check-formula
+x <- gw$snp_LDLR; y <- gw$ldl
+Sxx <- sum((x - mean(x))^2)
+Sxy <- sum((x - mean(x)) * y)
+b1  <- Sxy / Sxx
+b0  <- mean(y) - b1 * mean(x)
+c(b0 = b0, b1 = b1)
+
+SSE <- sum(residuals(model)^2)
+c(MSE = SSE / (nrow(gw) - 2), sigma2_hat = summary(model)$sigma^2)
+```
+
+::: {.callout-warning}
+## Extrapolation (외삽)
+- 데이터 범위를 벗어난 $x$에 대한 $\hat\beta$ 계산값은 실제로 그런지 알 수 없음
+- 회귀식은 관측된 $x$의 범위 안에서만 근거가 있음
+- 유전형은 극단적인 예: $x = 3$은 존재하지 않음 (사람은 염색체가 두 벌)
+- 연속형 $X$라도 마찬가지 — 예: 30~80세 자료로 10세의 LDL을 말할 수 없음
+:::
+
+## 4. Statistical Inference
+
+### 4.1 회귀 추정량의 성질
+
+#### Unbiasedness
+
+- $\hat\beta_1$을 $Y_i$의 선형결합으로 다시 쓰면
+
+$$\hat\beta_1 = \frac{\sum (x_i - \bar x) Y_i}{S_{xx}} = \sum_{i=1}^{n} c_i Y_i,
+\qquad c_i = \frac{x_i - \bar x}{S_{xx}}$$
+
+- $x_i$는 고정 → $c_i$는 상수
+
+$$E[\hat\beta_1] = \sum c_i E[Y_i] = \sum c_i (\beta_0 + \beta_1 x_i)
+= \beta_0 \underbrace{\sum c_i}_{=\,0} + \beta_1 \underbrace{\sum c_i x_i}_{=\,1} = \beta_1$$
+
+- 추정량의 기댓값 = 참값 → **불편추정량**
+
+#### 기댓값과 분산
+
+$$E(\hat\beta_1) = \beta_1, \qquad \mathrm{Var}(\hat\beta_1) = \frac{\sigma^2}{S_{xx}}$$
+
+::: {.callout-tip}
+- $S_{xx}$가 클수록, 즉 $x$가 넓게 퍼져 있을수록 기울기 추정이 정확
+:::
+
+#### 표본분포
+
+- $\hat\beta_1$ = 정규분포를 따르는 $c_i Y_i$의 선형결합 → 그 자체도 정규분포
+
+$$\hat\beta_1 \sim N\!\left(\beta_1,\ \frac{\sigma^2}{S_{xx}}\right)$$
+
+- 문제: $\sigma^2$을 모름
+- $MSE$로 대체 → (정규) / $\sqrt{(\text{카이제곱})/\nu}$ 형태 → **t분포**
+
+$$\frac{\hat\beta_1 - \beta_1}{\sqrt{MSE / S_{xx}}} \sim t_{n-2}$$
+
+### 4.2 기울기에 대한 추론
+
+- 평균, 분산, 분포를 모두 알았으므로 신뢰구간과 검정이 가능
+
+#### Confidence interval
+
+$$\hat\beta_1 \ \pm\ \underbrace{t_{\alpha/2,\, n-2}}_{\text{t-critical point}} \cdot
+\underbrace{\sqrt{\frac{MSE}{S_{xx}}}}_{\text{standard error of } \hat\beta_1}$$
+
+#### Hypothesis testing — 양측검정
+
+$$H_0: \beta_1 = 0 \quad \text{vs.} \quad H_a: \beta_1 \neq 0$$
+
+$$t\text{-value} = \frac{\hat\beta_1 - 0}{\sqrt{\hat\sigma^2 / S_{xx}}}
+= \frac{\hat\beta_1 \sqrt{S_{xx}}}{\hat\sigma}$$
+
+- 판정: $|t| > t_{\alpha/2,\,n-2}$이면 기각
+- 논리
+  - $|t|$가 크다 → $\hat\beta_1$이 0에서 멀리 떨어져 있다
+  - → $H_0$일 확률이 작다 → $\beta_1 \neq 0$
+
+::: {.callout-note}
+- 귀무가설이 $\beta_1 = 0$이 아니라 특정 상수 $c$라면 분자에 0 대신 $c$를 넣으면 그대로 적용
+- Part 1-III의 부모–자녀 회귀에서 $H_0: \beta_1 = 1$을 그렇게 검정함
+:::
+
+#### 단측검정
+
+| 가설 | p-value |
+|---|---|
+| $H_0: \beta_1 \le 0$ vs. $H_a: \beta_1 > 0$ | $P(T_{n-2} > t)$ |
+| $H_0: \beta_1 \ge 0$ vs. $H_a: \beta_1 < 0$ | $P(T_{n-2} < t)$ |
+
+#### 절편에 대한 추론
+
+- $\hat\beta_0 = \bar y - \hat\beta_1 \bar x$ 이므로
+
+$$E(\hat\beta_0) = \beta_0, \qquad
+\mathrm{Var}(\hat\beta_0) = \sigma^2\left(\frac{1}{n} + \frac{\bar x^2}{S_{xx}}\right)$$
+
+$$\text{CI:}\quad \hat\beta_0 \ \pm\ t_{\alpha/2,\,n-2}\sqrt{MSE\left(\frac{1}{n} + \frac{\bar x^2}{S_{xx}}\right)}$$
+
+## 5. Data Example II — Inference
+
+```{r}
+#| label: inference-summary
+summary(model)$coefficients
+cat("Residual standard error:", summary(model)$sigma,
+    "on", df.residual(model), "degrees of freedom\n")
+```
+
+- 읽는 법
+  - $\beta_1$ 추정값 **0.3356**, 표준오차 **0.0311** → 분산 추정값 $0.0311^2$
+  - $\beta_1$의 표본분포: 자유도 1498인 t분포
+  - $\beta_0$ 추정값 **2.9136**, 분산 추정값 $0.0255^2$
+  - $\beta_1$은 통계적으로 유의 (t $= 10.79$, p-value $= 3.6\times10^{-26}$)
+
+```{r}
+#| label: inference-onesided
+tvalue <- summary(model)$coefficients["snp_LDLR", "t value"]
+tvalue
+## H_a: beta_1 > 0 (위험 대립유전자가 LDL을 올린다) 에 대한 p-value
+pt(tvalue, df = df.residual(model), lower.tail = FALSE)
+
+confint(model, level = 0.99)
+confint(model, level = 0.95)
+```
+
+- $H_a: \beta_1 > 0$에 대한 p-value $= 1.8\times10^{-26}$ → 대립가설 채택
+- $\beta_1$의 99% 신뢰구간 $(0.255,\ 0.416)$ → 0을 포함하지 않음, 같은 결론
+
+::: {.callout-note}
+## 참값과 비교
+- 참값 $\beta_1 = 0.28$ → 95% 신뢰구간 $(0.275,\ 0.397)$ **안에 있음**
+- 그러나 점추정치 0.336은 참값보다 20% 큼, 구간도 참값이 거의 하한에 걸림
+- 이유는 두 가지
+  - 몇 사람의 극단적인 LDL (1-II 이상치, 3-III 영향점)
+  - 단순회귀라 다른 변수를 보정하지 않음 (Part 3)
+:::
+
+::: {.callout-important}
+## GWAS에서는
+- 위의 검정을 SNP 수십만~수백만 개에 대해 **각각** 반복
+- 검정을 그렇게 많이 하면 우연히 작은 p-value가 쏟아짐 → 기준을 크게 낮춤
+  - **전장유전체 유의수준 $5\times10^{-8}$** (독립 검정 약 100만 개 × 0.05의 Bonferroni 보정)
+- 이 SNP의 p-value $3.6\times10^{-26}$은 그 기준도 여유 있게 통과
+- SNP마다 $-\log_{10}(p)$를 염색체 위치에 찍은 그림이 **Manhattan plot** (5-III)
+:::
+
+::: {.callout-tip}
+## 다변량으로 가면
+- 다중회귀에서는 계수 벡터 전체를 한꺼번에 검정
+- → t가 아니라 $\chi^2$(또는 F)을 씀
+- Part 3에서 다룸
+:::
