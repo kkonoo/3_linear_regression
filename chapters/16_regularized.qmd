@@ -9,21 +9,10 @@ format:
       text: |
         <meta name="ai-title" content="5-II. 벌점회귀">
         <meta name="ai-context" content="
-        이 챕터는 벌점회귀를 다룹니다. 자료는 KNU-Lipid 확장판 SNP 2000개, 반응변수는 총콜레스테롤입니다.
-        변수를 고르는 대신 계수를 0 쪽으로 줄이는 접근입니다.
-        목적함수는 잔차제곱합에 벌점을 더한 것이고, 벌점의 형태가 방법을 결정합니다.
-        Ridge는 L2 벌점으로 계수를 줄이지만 0으로 만들지 않고, 닫힌 해 (X'X + n*lambda*I)^(-1) X'y 가 있습니다.
-        p > n 이어도 X'X + n*lambda*I 는 항상 역행렬이 있으므로 풀립니다.
-        Lasso는 L1 벌점으로 계수를 정확히 0으로 만들어 변수선택을 동시에 합니다.
-        기하적으로 L1 공의 모서리가 축 위에 있기 때문입니다.
-        Lasso의 한계는 p > n 일 때 최대 n개까지만 고를 수 있다는 점과
-        상관이 높은 변수 묶음에서 하나만 고른다는 점입니다.
-        Elastic Net은 L1과 L2를 섞어 이 문제를 완화합니다.
-        표준화는 필수입니다. 척도가 다르면 벌점이 공평하게 적용되지 않습니다.
-        lambda는 교차검증으로 고르며 lambda.min과 lambda.1se 두 가지 관행이 있습니다.
-        이 자료에서 lasso lambda.min은 163개를 골라 그중 28개가 참 인과이고 검정 증가 R2는 0.267,
-        ridge는 2000개 전부를 남기고 0.104, elastic net은 193개로 0.261입니다.
-        LD 블록에서 lasso는 snp_LDLR 하나만 고르고 ridge는 네 SNP에 계수를 고루 나눕니다.
+        Ridge, Lasso, Elastic Net을 공변량 보정된 GWAS 자료로 비교합니다.
+        Y와 SNP 양쪽을 훈련자료에서 잔차화하고 검정자료에는 훈련 변환만 적용합니다.
+        검정 예측 ΔR2는 고정된 기준모형과 SNP 모형의 SSE 차이를 검정 SST로 나눈 값이며 재적합하지 않습니다.
+        계수는 반응 잔차 SD / SNP 잔차 SD를 곱해 원단위 참값과 비교합니다. 수치는 본문 계산을 참조합니다.
         ">
 ---
 
@@ -51,13 +40,20 @@ dtr <- co[idx, ]; dte <- co[-idx, ]
 ytr <- y[idx];    yte <- y[-idx]
 mc  <- lm(ytr ~ age + sex + bmi + PC1, data = dtr)
 rtr <- resid(mc)
+## Y와 모든 SNP를 같은 공변량에 회귀 (훈련자료에서만 추정)
+C_tr <- model.matrix(~ age + sex + bmi + PC1, data = dtr)
+C_te <- model.matrix(~ age + sex + bmi + PC1, data = dte)
+B_g <- qr.coef(qr(C_tr), Gtr)
+Gtr <- Gtr - C_tr %*% B_g
+Gte <- Gte - C_te %*% B_g
 Xs  <- scale(Gtr)
 ys  <- as.numeric(scale(rtr))
 Xte <- scale(Gte, center = attr(Xs, "scaled:center"),
              scale = attr(Xs, "scaled:scale"))
 incR2 <- function(p) {
-  summary(lm(yte ~ p + age + sex + bmi + PC1, data = dte))$r.squared -
-    summary(lm(yte ~ age + sex + bmi + PC1, data = dte))$r.squared
+  base <- as.numeric(predict(mc, newdata = dte))
+  (sum((yte - base)^2) - sum((yte - base - p)^2)) /
+    sum((yte - mean(yte))^2)
 }
 ```
 
@@ -122,6 +118,10 @@ par(op)
 
 ### 2.1 표준화는 필수
 
+- 5-I처럼 훈련자료에서 **Y와 SNP 양쪽을 공변량으로 잔차화**한 뒤 표준화함
+- 검정자료에는 훈련자료의 공변량 계수·평균·표준편차만 적용함
+- 아래 `Gtr`, `Gte`는 잔차화된 SNP 값이고, 원래 유전형은 `G`에 보관되어 있음
+
 - 벌점 $\sum\beta_j^2$이나 $\sum\lvert\beta_j\rvert$는 **계수의 크기**를 재는데,
   계수의 크기는 $X_j$의 단위에 따라 달라짐
 - → 표준화하지 않으면 **분산이 큰 변수가 유리**해짐
@@ -135,12 +135,12 @@ b_ns <- as.numeric(coef(glmnet(Gtr, rtr, alpha = 1, lambda = 0.03,
                                standardize = FALSE)))[-1]
 b_s  <- as.numeric(coef(glmnet(Gtr, rtr, alpha = 1, lambda = 0.03,
                                standardize = TRUE)))[-1]
-maf <- colMeans(Gtr) / 2
+maf <- colMeans(G[idx, ]) / 2
 rbind(selected = c(no_std = sum(b_ns != 0), std = sum(b_s != 0)),
       mean_maf = c(mean(maf[b_ns != 0]), mean(maf[b_s != 0])))
 ```
 
-- 표준화하지 않으면 **흔한 변이(MAF가 큰 SNP)** 쪽으로 쏠림 (평균 MAF 0.351 vs 0.277)
+- 표준화하지 않으면 **흔한 변이(MAF가 큰 SNP)** 쪽으로 쏠림 (평균 MAF `r round(mean(maf[b_ns != 0]), 3)` vs `r round(mean(maf[b_s != 0]), 3)`)
 - `glmnet`의 기본값은 `standardize = TRUE`이고, 계수는 원 척도로 되돌려 줌
 - 절편에는 벌점을 주지 않음
 
@@ -265,6 +265,10 @@ par(op)
 
 ### 3.2 교차검증
 
+- 아래 CV는 훈련자료에서 미리 만든 잔차·표준화 값에 조건부인 간단한 예제임
+- 전처리를 포함한 전체 절차의 CV 오차를 보고하려면 **각 fold 안에서 잔차화·표준화부터 다시 적합**해야 함
+- 여기서는 최종 성능을 전처리에 쓰지 않은 별도 검정자료에서 평가함
+
 ```{r}
 #| label: cv
 #| fig-cap: "10-fold 교차검증 곡선"
@@ -286,26 +290,32 @@ res <- do.call(rbind, lapply(
   list(lasso = cv_l, ridge = cv_r, enet = cv_e), function(cv) {
     t(sapply(c("lambda.min", "lambda.1se"), function(s) {
       b <- as.numeric(coef(cv, s = s))[-1]
-      p <- as.numeric(Xte %*% b)
+      p <- mean(rtr) + sd(rtr) * as.numeric(predict(cv, Xte, s = s))
       c(lambda = cv[[s]], nonzero = sum(b != 0),
         true_causal = sum(b != 0 & tru$is_causal == 1),
         test_cor = cor(p, yte), inc_R2 = incR2(p))
     }))
   }))
+rownames(res) <- paste(rep(c("lasso", "ridge", "enet"), each = 2),
+                       rep(c("lambda.min", "lambda.1se"), 3), sep = ".")
 round(res, 4)
 ```
 
 ::: {.callout-important}
-## 세 방법의 비교 (검정자료 증가 결정계수)
+## 세 방법의 비교 (고정된 모형의 검정 예측 ΔR²)
+
+- 공변량 기준모형도 훈련자료에서 고정하고, 검정자료에서는 재적합하지 않음
+- $\Delta R^2 = (SSE_{base} - SSE_{full}) / SST_{test}$; 음수면 SNP 추가가 예측을 악화시킴
+- PRS를 넣어 검정자료에 회귀를 다시 적합하는 **추가 설명력** 지표와 구분함
 
 | 방법 | 선택된 SNP | 그중 참 인과 | 증가 $R^2$ |
 |---|---|---|---|
-| Lasso (`lambda.min`) | 163 | 28 / 40 | **0.267** |
-| Lasso (`lambda.1se`) | 73 | 23 / 40 | 0.248 |
-| Elastic Net | 193 | 29 / 40 | 0.261 |
-| Ridge | 2000 | 40 / 40 | 0.104 |
+| Lasso (`lambda.min`) | `r res["lasso.lambda.min", "nonzero"]` | `r res["lasso.lambda.min", "true_causal"]` / 40 | `r round(res["lasso.lambda.min", "inc_R2"], 3)` |
+| Lasso (`lambda.1se`) | `r res["lasso.lambda.1se", "nonzero"]` | `r res["lasso.lambda.1se", "true_causal"]` / 40 | `r round(res["lasso.lambda.1se", "inc_R2"], 3)` |
+| Elastic Net | `r res["enet.lambda.min", "nonzero"]` | `r res["enet.lambda.min", "true_causal"]` / 40 | `r round(res["enet.lambda.min", "inc_R2"], 3)` |
+| Ridge | `r res["ridge.lambda.min", "nonzero"]` | `r res["ridge.lambda.min", "true_causal"]` / 40 | `r round(res["ridge.lambda.min", "inc_R2"], 3)` |
 
-- 참 유전율은 $h^2 = 0.385$ → Lasso가 그중 약 70%를 회수
+- 참 유전율 $h^2 = 0.385$는 생성자료의 참고값임. 공변량 조건부 예측 ΔR²와 분모·대상이 달라 단순히 나눠 회수율로 해석하지 않음
 - Ridge는 인과 SNP를 하나도 버리지 않지만, 귀무 SNP 1960개도 같이 들고 감
   → **잡음이 신호를 덮어** 예측이 크게 나쁨
 - 신호가 희소한(sparse) 상황에서는 Lasso 계열이 유리
@@ -319,7 +329,7 @@ kk <- c("snp_LDLR", "snp_LD1", "snp_LD2", "snp_AIM")
 cf <- function(cv) {
   b <- as.numeric(coef(cv, s = "lambda.min"))[-1]
   names(b) <- colnames(Gtr)
-  b[kk]
+  (b * sd(rtr) / attr(Xs, "scaled:scale"))[kk]  # 원단위: mmol/L / 대립유전자
 }
 round(rbind(lasso = cf(cv_l), ridge = cf(cv_r), enet = cf(cv_e),
             truth = tru[kk, "beta_true"]), 4)
@@ -327,12 +337,11 @@ round(cor(Gtr[, kk]), 3)
 ```
 
 ::: {.callout-important}
-- 상관 0.85~0.95인 네 SNP에 대해
-  - **Lasso**: `snp_LDLR` 하나만 0.123, 나머지는 0
-  - **Ridge**: 네 개에 0.024 / 0.022 / 0.019 / 0.006으로 **고루 나눠 줌**
-  - **Elastic Net**: 두 개를 살림 (0.103, 0.016) — 중간
-- 참값은 `snp_LDLR`만 0.24 → Lasso가 옳게 골랐지만 계수는 **절반으로 축소**
-- 축소편향(shrinkage bias): 벌점의 대가
+- 표의 모든 계수는 **원단위(mmol/L / 대립유전자 1개)**로 비교함
+- 변환식: $\hat\beta_{original,j} = \hat\beta_{standardized,j}\,s_{Y,resid}/s_{G_j,resid}$
+- `snp_LDLR`의 참값은 0.24, Lasso 추정치는 **`r round(cf(cv_l)["snp_LDLR"], 4)`**
+- 표준화 계수를 0.24와 직접 비교해 “절반으로 축소”라고 해석하면 안 됨
+- 추정치와 참값의 차이에는 벌점에 의한 축소뿐 아니라 표본 변동과 공변량 모형의 영향도 포함됨
 :::
 
 ::: {.callout-warning}
@@ -368,13 +377,16 @@ select(rg)
 #| label: glmnet-binomial
 ## Part 4의 이분형 형질에도 같은 방식으로
 dis <- co$disease[idx]
-cvb <- cv.glmnet(Xs, dis, family = "binomial", alpha = 1,
-                 nfolds = 10, standardize = FALSE)
+## 로지스틱 회귀에는 선형 잔차화의 동치가 성립하지 않음
+Xb <- cbind(C_tr[, -1, drop = FALSE], G[idx, ])
+pf <- c(rep(0, ncol(C_tr) - 1), rep(1, ncol(G)))
+cvb <- cv.glmnet(Xb, dis, family = "binomial", alpha = 1,
+                 nfolds = 10, penalty.factor = pf)
 b <- as.numeric(coef(cvb, s = "lambda.min"))[-1]
-c(nonzero = sum(b != 0), lambda = cvb$lambda.min)
+c(nonzero_SNP = sum(b[pf == 1] != 0), lambda = cvb$lambda.min)
 ```
 
-- `disease`는 `ldl`을 통해서만 유전적 영향을 받으므로 (4-III) 고른 SNP가 2개뿐
+- 공변량은 `penalty.factor = 0`으로 유지하고, SNP에만 벌점을 적용함
 - 문법은 연속형과 완전히 같음 — 벌점만 이탈도에 붙음
 
 $$\hat{\boldsymbol\beta} = \arg\min

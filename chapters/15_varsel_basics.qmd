@@ -9,19 +9,10 @@ format:
       text: |
         <meta name="ai-title" content="5-I. 변수선택의 기초">
         <meta name="ai-context" content="
-        이 챕터는 변수선택의 기초를 다루며, 실습 자료는 KNU-Lipid 코호트를 확장한 SNP 2000개 패널입니다.
-        반응변수는 다유전자 형질인 총콜레스테롤 tc이고 인과 SNP는 40개, 유전율은 0.385입니다.
-        훈련 1000명, 검정 494명으로 나눕니다. p = 2000 > n = 1000이므로 최소제곱은 아예 풀리지 않습니다.
-        변수선택의 세 가지 동기는 고차원, 다중공선성, 설명과 예측의 목적 차이입니다.
-        핵심 개념은 편향-분산 절충입니다. 변수를 늘리면 편향은 줄고 분산은 늘어납니다.
-        훈련위험은 항상 낙관적이므로 복잡도 벌점을 더해 보정합니다.
-        Mallow's Cp, AIC, BIC, LOOCV가 그 방법이며 BIC의 벌점 log(n)이 가장 큽니다.
-        이 자료에서 모형 크기를 1에서 990까지 늘리면 훈련 R2는 0.088에서 0.997로 단조증가하지만
-        검정 R2는 k = 50 근처에서 0.227로 정점을 찍고 k = 990에서 -34.5까지 무너집니다.
-        전수탐색은 2^p 개의 모형을 봐야 하며 p = 2000이면 602자리 수입니다.
-        후보 15개로 줄이면 leaps로 전수탐색이 가능하고 BIC가 고른 8개는 모두 참 인과 SNP였습니다.
-        가장 중요한 경고는 선택편향입니다. 같은 자료로 고르고 같은 자료로 평가하면
-        반응변수를 무작위로 섞어도 훈련 R2가 평균 0.135나 나옵니다.
+        변수선택, 편향-분산 절충, Cp·AIC·BIC·LOOCV, stepwise를 GWAS 시뮬레이션으로 설명합니다.
+        훈련자료에서 Y와 SNP 양쪽을 공변량으로 잔차화하고 검정자료에는 훈련 변환만 적용합니다.
+        기준 계산에는 공변량 자유도를 반영하며, SNP 순위 선택을 포함한 외부 검증이 필요합니다.
+        수치 결과는 본문의 실행 결과와 표를 참조합니다.
         ">
 ---
 
@@ -70,6 +61,12 @@ ytr <- y[idx];    yte <- y[-idx]
 mc  <- lm(ytr ~ age + sex + bmi + PC1, data = dtr)
 rtr <- resid(mc)
 rte <- yte - as.numeric(predict(mc, newdata = dte))
+## Y와 모든 SNP를 같은 공변량에 회귀 (훈련자료에서만 추정)
+C_tr <- model.matrix(~ age + sex + bmi + PC1, data = dtr)
+C_te <- model.matrix(~ age + sex + bmi + PC1, data = dte)
+B_g <- qr.coef(qr(C_tr), Gtr)
+Gtr <- Gtr - C_tr %*% B_g
+Gte <- Gte - C_te %*% B_g
 ```
 
 ## 1. Introduction
@@ -156,17 +153,26 @@ c(train = nrow(Gtr), test = nrow(Gte), p = ncol(G))
 
 ```{r}
 #| label: covariates
-## 공변량 효과를 먼저 걷어내고, 잔차를 유전 성분의 반응변수로 씀
+## 반응과 SNP 양쪽에서 공변량 효과를 제거함 (FWL 정리)
 mc  <- lm(ytr ~ age + sex + bmi + PC1, data = dtr)
 rtr <- resid(mc)
 rte <- yte - as.numeric(predict(mc, newdata = dte))
+## Y와 모든 SNP를 같은 공변량에 회귀 (훈련자료에서만 추정)
+C_tr <- model.matrix(~ age + sex + bmi + PC1, data = dtr)
+C_te <- model.matrix(~ age + sex + bmi + PC1, data = dte)
+B_g <- qr.coef(qr(C_tr), Gtr)
+Gtr <- Gtr - C_tr %*% B_g
+Gte <- Gte - C_te %*% B_g
 round(summary(mc)$r.squared, 4)
 ```
 
 ::: {.callout-tip}
 - 나이·성별·BMI·집단구조는 **교란/통제 변수** → 선택 대상이 아님 (주의사항 1·2)
-- 먼저 회귀해 잔차를 만들어 두면 이후 변수선택이 SNP에만 집중됨
-- 검정자료의 잔차는 **훈련자료에서 얻은 계수**로 계산해야 함
+- **Y와 각 SNP 양쪽을** 공변량에 회귀해 잔차화함 (Frisch–Waugh–Lovell 정리)
+- Y만 잔차화하면 SNP와 공변량이 상관될 때 공동 보정과 달라짐
+- 아래 `Gtr`, `Gte`는 공변량 보정 후 SNP 값이며, 더 이상 0/1/2 유전형 자체가 아님
+- 검정자료의 Y·SNP 잔차는 모두 **훈련자료에서 얻은 계수**로 계산함
+- 잔차 회귀의 SNP 계수는 공변량을 함께 넣은 회귀와 같음. 추론·기준 계산에는 공변량 추정에 쓴 자유도도 반영해야 함
 :::
 
 ```{r}
@@ -189,7 +195,7 @@ c(estimable = sum(!is.na(coef(m_all))),
   not_estimable = sum(is.na(coef(m_all))))
 ```
 
-- 계수 2001개 중 1000개만 추정되고 나머지는 `NA` → **모형이 식별되지 않음**
+- 공변량을 제거하면 가용 rank가 더 줄어듦. `NA` 계수가 생기므로 **모형이 식별되지 않음**
 
 ## 3. Prediction Risk Estimation
 
@@ -244,8 +250,8 @@ legend("bottomleft", bty = "n", pch = 19, col = c("#4c72b0", "#c44e52"),
 ```
 
 ::: {.callout-important}
-- 훈련 $R^2$: 0.088 → **0.997** (단조증가)
-- 검정 $R^2$: $k = 50$ 근처에서 **0.227**로 정점 → $k = 990$에서 **−34.5**
+- 훈련 $R^2$: `r round(tab[1, "trainR2"], 3)` → **`r round(tail(tab[, "trainR2"], 1), 3)`** (단조증가)
+- 검정 $R^2$: $k =$ `r tab[which.max(tab[, "testR2"]), "k"]`에서 **`r round(max(tab[, "testR2"]), 3)`**로 정점 → $k = 990$에서 **`r round(tail(tab[, "testR2"], 1), 2)`**
 - $k = 990$ 모형은 훈련자료를 거의 완벽히 설명하지만 **새 사람에게는 평균보다도 못함**
 - 이것이 과적합
 :::
@@ -290,17 +296,19 @@ $$\text{LOOCV}: \quad
 #| label: criteria
 K <- 150
 full <- lm(rtr ~ Gtr[, ord[1:K]])
-s2   <- summary(full)$sigma^2
+q    <- ncol(C_tr)  # 절편을 포함한 공변량 수
+s2   <- sum(resid(full)^2) / (length(rtr) - q - K)
 n    <- length(rtr)
 
 crit <- t(sapply(1:K, function(k) {
   s <- ord[1:k]
   m <- lm(rtr ~ Gtr[, s])
   sse <- sum(resid(m)^2)
-  h   <- hatvalues(m)
+  h   <- hatvalues(m) + hatvalues(mc) - 1 / n  # 공동모형 leverage
   pte <- as.numeric(cbind(1, Gte[, s]) %*% coef(m))
-  c(k = k, Cp = sse / s2 - n + 2 * (k + 1),
-    AIC = AIC(m), BIC = BIC(m),
+  c(k = k, Cp = sse / s2 - n + 2 * (k + q),
+    AIC = n * log(sse / n) + 2 * (k + q + 1),
+    BIC = n * log(sse / n) + log(n) * (k + q + 1),
     LOOCV = mean((resid(m) / (1 - h))^2),
     testMSE = mean((rte - pte)^2))
 }))
@@ -326,13 +334,14 @@ legend("topright", bty = "n", lwd = 2, lty = 1,
 
 | 기준 | 최적 $\lvert S\rvert$ |
 |---|---|
-| $C_p$ | 144 |
-| AIC | 150 (경계) |
-| **BIC** | **11** |
-| LOOCV | 144 |
-| 검정 MSE (정답) | 88 |
+| $C_p$ | `r crit[which.min(crit[, "Cp"]), "k"]` |
+| AIC | `r crit[which.min(crit[, "AIC"]), "k"]` |
+| **BIC** | `r crit[which.min(crit[, "BIC"]), "k"]` |
+| LOOCV | `r crit[which.min(crit[, "LOOCV"]), "k"]` |
+| 검정 MSE (정답) | `r crit[which.min(crit[, "testMSE"]), "k"]` |
 
-- $C_p$·AIC·LOOCV는 끝까지 내려가고, BIC만 작은 모형을 고름
+- 기준별 최적 크기는 위 계산으로 비교함. 여기의 LOOCV는 **선택된 SNP 집합을 고정한 공동 선형모형**의 값임
+- 각 fold에서 SNP 순위를 다시 고르는 전체 선택 절차의 CV는 아님
 - 왜 이렇게 빗나가는가
   - 이 기준들은 **후보 모형이 미리 정해져 있다**고 가정함
   - 그런데 우리는 후보 순서를 **같은 자료의 한계 p-value**로 정했음
@@ -387,6 +396,12 @@ s15 <- ord[1:15]
 D15 <- data.frame(rtr = rtr, Gtr[, s15])
 rs  <- regsubsets(rtr ~ ., data = D15, nvmax = 15)
 sm  <- summary(rs)
+## 공변량 추정 자유도를 포함한 잔차모형 기준
+ks <- seq_along(sm$rss); q <- ncol(C_tr); n <- length(rtr)
+s2_sub <- tail(sm$rss, 1) / (n - q - max(ks))
+sm$cp <- sm$rss / s2_sub - n + 2 * (q + ks)
+sm$bic <- n * log(sm$rss / n) + log(n) * (q + ks + 1)
+sm$adjr2 <- 1 - (sm$rss / (n - q - ks)) / (sum(rtr^2) / (n - q))
 round(data.frame(k = 1:15, adjR2 = sm$adjr2, Cp = sm$cp,
                  BIC = sm$bic), 3)
 c(best_adjR2 = which.max(sm$adjr2), best_Cp = which.min(sm$cp),
@@ -401,7 +416,7 @@ c(selected = length(sel), truly_causal = sum(tru[sel, "is_causal"]))
 ```
 
 ::: {.callout-important}
-- BIC가 고른 8개가 **전부 참 인과 SNP**
+- BIC가 고른 **`r length(sel)`개 중 `r sum(tru[sel, "is_causal"])`개**가 참 인과 SNP
 - 후보를 15개로 좁혀 놓으면 전수탐색이 잘 작동함
 - 문제는 "15개로 좁히는 과정"에 이미 같은 자료를 썼다는 것 (§5.4)
 :::
@@ -423,8 +438,8 @@ c(selected = length(v), truly_causal = sum(tru[v, "is_causal"]),
 head(v, 12)
 ```
 
-- 39개를 골라 그중 21개가 참 인과 — 정밀도 0.54, 재현율 0.53
-- 인과 SNP 40개 중 절반은 못 찾음 (효과가 작아 검정력이 부족)
+- `r length(v)`개를 골라 그중 `r sum(tru[v, "is_causal"])`개가 참 인과 — 정밀도 `r round(mean(tru[v, "is_causal"]), 2)`, 재현율 `r round(sum(tru[v, "is_causal"]) / sum(tru$is_causal), 2)`
+- 작은 효과의 인과 SNP는 검정력 부족으로 놓칠 수 있음
 
 ### 5.3 LD 블록 안에서 무엇이 뽑히는가
 
@@ -468,11 +483,11 @@ round(c(mean = mean(perm), min = min(perm), max = max(perm)), 4)
 
 | | 훈련 $R^2$ |
 |---|---|
-| 실제 자료 (상위 20개 SNP) | 0.329 |
-| **반응변수를 섞은 자료** | **평균 0.135** (0.118 ~ 0.161) |
+| 실제 자료 (상위 20개 SNP) | `r round(summary(lm(rtr ~ Gtr[, s20]))$r.squared, 3)` |
+| **반응변수를 섞은 자료** | **평균 `r round(mean(perm), 3)`** (`r round(min(perm), 3)` ~ `r round(max(perm), 3)`) |
 
-- 신호가 전혀 없는데도 $R^2$가 0.135 나옴 → 순전히 **선택 때문에 생긴 값**
-- 실제 0.329 중 상당 부분이 이 편향
+- 신호를 끊어도 훈련 $R^2$가 양수로 나옴 → **선택에 따른 낙관성**
+- 이 순열 실험은 편향을 보여 주는 예시이며, 실제 $R^2$에서 빼는 보정값은 아님
 - 선택 절차를 거친 모형의 $R^2$, p-value, 신뢰구간은 **그대로 믿으면 안 됨**
 - 해결: 선택 과정을 포함한 전체를 **한 번도 안 본 자료**로 평가 (5-III)
 :::
