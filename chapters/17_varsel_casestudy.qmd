@@ -205,6 +205,15 @@ Xva <- scale(Gva, center = ctr, scale = sdv)
 Xte <- scale(Gte, center = ctr, scale = sdv)
 ```
 
+**직접 해 보기** — [다중검정과 FDR ↗](https://kkonoo.github.io/edu_sims/sims/multiple-testing/?lang=ko){target="_blank"}
+
+::: {.column-page}
+```{=html}
+<iframe src="https://kkonoo.github.io/edu_sims/sims/multiple-testing/?embed=1&lang=ko" title="다중검정과 FDR" loading="lazy"
+        style="width: 100%; height: 1300px; border: 0;"></iframe>
+```
+:::
+
 ## 3. 방법 1 — C+T (Clumping and Thresholding)
 
 - GWAS PRS의 오랜 표준
