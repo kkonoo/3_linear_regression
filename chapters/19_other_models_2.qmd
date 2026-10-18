@@ -1,5 +1,5 @@
 ---
-title: "6-II. Other Regression Models (2): Time Series, Spatial, Mixed Effects"
+title: "II. Other Regression Models (2): Time Series, Spatial, Mixed Effects"
 description: "상관된 오차를 다루는 세 가지 확장 — 연속혈당(CGM), Visium 공간전사체, 가계 코호트 LMM — 그리고 전체 정리"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="6-II. 기타 회귀모형 (2): 시계열, 공간, 혼합효과">
+        <meta name="ai-title" content="II. 기타 회귀모형 (2): 시계열, 공간, 혼합효과">
         <meta name="ai-context" content="
         이 챕터는 오차의 독립성(무상관) 가정이 깨지는 세 가지 상황과 강의 전체 정리를 다룹니다.
         상관을 무시하면 유효 자유도가 표본크기보다 작은데도 크게 계산되어 신뢰구간이 너무 좁아집니다.
@@ -29,22 +29,6 @@ format:
         마지막으로 단순회귀부터 GAM·혼합효과까지 모든 모형을 자료·가정·추정법 기준으로 정리합니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `6-II. (others) time series, spatial, mixed effect.docx`
-- 원자료의 예제를 생물학 자료로 교체
-
-| 원자료 | 이 장 |
-|---|---|
-| GDP, IBM 주가, S&P500 | 연속혈당측정(CGM) 14일 |
-| 응급실 이용률 지도, fMRI | Visium 유사 공간전사체 |
-| 혈압약 반복측정, 의료기관 | KNU-Family 가계 코호트 (혈연 LMM) |
-
-- 데이터: `data/cgm_glucose.csv`, `data/visium_spots.csv`, `data/visium_truth.csv`,
-  `data/family_cohort.csv`, `data/family_geno.csv.gz`
-- 생성 스크립트: `data-raw/simulate_part6_2.R` (`set.seed(20260922)`)
-:::
 
 ::: {.callout-important collapse="true"}
 ## 이 장의 실습 자료 — 참값

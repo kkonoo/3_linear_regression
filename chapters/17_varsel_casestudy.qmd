@@ -1,5 +1,5 @@
 ---
-title: "5-III. Case Study: Polygenic Risk Score"
+title: "III. Case Study: Polygenic Risk Score"
 description: "GWAS 요약통계로 다유전자 위험점수 만들기 — C+T, Lasso, 그리고 lassosum 직접 구현"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="5-III. 사례연구: 다유전자 위험점수(PRS)">
+        <meta name="ai-title" content="III. 사례연구: 다유전자 위험점수(PRS)">
         <meta name="ai-context" content="
         PRS 구축을 훈련 1000명, 검증 247명, 검정 247명으로 나누어 실습합니다.
         Y와 SNP를 훈련 공변량에 잔차화하고 같은 변환을 검증·검정에 적용합니다.
@@ -16,13 +16,6 @@ format:
         성능은 고정된 예측식의 ΔR2이며 검정자료에서 PRS·공변량 계수를 재적합하지 않습니다. 수치는 본문 표를 참조합니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `5-III. (Model selection) Data Analysis Example.docx`
-- 원자료의 응급실 의료비(ED Healthcare Costs) 사례를 **PRS 구축**으로 교체
-- 데이터: `data/gwas_geno_wide.csv.gz`, `data/gwas_tc.csv`, `data/gwas_geno_truth.csv`
-:::
 
 ```{r}
 #| label: setup

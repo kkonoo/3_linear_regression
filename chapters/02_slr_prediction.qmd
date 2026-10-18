@@ -1,5 +1,5 @@
 ---
-title: "1-II. Simple Linear Regression: Prediction and Model Evaluation"
+title: "II. Simple Linear Regression: Prediction and Model Evaluation"
 description: "회귀선 추정과 예측, 잔차 진단, 이상치와 설명력 — 유전형으로 LDL 예측하기"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="1-II. 단순선형회귀: 예측과 모형평가">
+        <meta name="ai-title" content="II. 단순선형회귀: 예측과 모형평가">
         <meta name="ai-context" content="
         이 챕터는 단순선형회귀의 예측과 모형평가를 다룹니다.
         estimation(평균 반응의 추정)과 prediction(새 관측치의 예측)은 다릅니다.
@@ -23,13 +23,6 @@ format:
         이 자료에서는 표준화잔차 4.6~7.9인 6명이 있으며 모두 유전형 BB입니다. 정체는 3-III에서 밝혀집니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `1-II. (Simple) Prediction and model evaluation.docx`
-- 원자료의 meddcor를 KNU-Lipid 코호트로 교체 (1-I과 같은 모형)
-- 데이터: `data/gwas_cohort.csv`
-:::
 
 ```{r}
 #| label: setup

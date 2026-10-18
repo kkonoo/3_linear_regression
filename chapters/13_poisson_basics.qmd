@@ -1,5 +1,5 @@
 ---
-title: "4-IV. Poisson Regression: Basic Concepts and Estimation"
+title: "IV. Poisson Regression: Basic Concepts and Estimation"
 description: "계수형 반응, 로그 연결함수, offset과 노출량, 발생률비 — RNA-seq 카운트 자료"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="4-IV. 포아송 회귀: 기본 개념과 추정">
+        <meta name="ai-title" content="IV. 포아송 회귀: 기본 개념과 추정">
         <meta name="ai-context" content="
         이 챕터는 포아송 회귀의 기본 개념과 추정을 다루며, 실습 자료는 가상 RNA-seq 카운트 행렬입니다.
         일반화선형모형(GLM)은 분포와 연결함수를 바꿔 끼우는 하나의 틀입니다.
@@ -24,14 +24,6 @@ format:
         예제 유전자 G0001의 참 log2 fold change는 1.2이고 추정치는 자연로그 척도에서 0.834입니다(참값 0.8318).
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `4-IV. (Poisson) Basic Concepts and Estimation.docx`
-- 원자료의 High School Awards / Insurance Claims 예제를 **RNA-seq 카운트**로 교체
-- 데이터: `data/rnaseq_counts.csv`, `data/rnaseq_samples.csv`, `data/rnaseq_truth.csv`
-- 생성 스크립트: `data-raw/simulate_rnaseq.R`
-:::
 
 ::: {.callout-important collapse="true"}
 ## 실습 자료 — KNU-RNA 실험

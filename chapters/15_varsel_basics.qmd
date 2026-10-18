@@ -1,5 +1,5 @@
 ---
-title: "5-I. Basics of Variable Selection"
+title: "I. Basics of Variable Selection"
 description: "고차원 문제, 편향-분산 절충, Cp·AIC·BIC·LOOCV, 부분집합 탐색과 stepwise — GWAS 2000개 SNP"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="5-I. 변수선택의 기초">
+        <meta name="ai-title" content="I. 변수선택의 기초">
         <meta name="ai-context" content="
         변수선택, 편향-분산 절충, Cp·AIC·BIC·LOOCV, stepwise를 GWAS 시뮬레이션으로 설명합니다.
         훈련자료에서 Y와 SNP 양쪽을 공변량으로 잔차화하고 검정자료에는 훈련 변환만 적용합니다.
@@ -15,14 +15,6 @@ format:
         수치 결과는 본문의 실행 결과와 표를 참조합니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `5-I. (Model selection) Basics of Variable Selection.docx`
-- 원자료의 SAT / 파산(bankruptcy) 예제를 **GWAS 다유전자 형질**로 교체
-- 데이터: `data/gwas_geno_wide.csv.gz`, `data/gwas_tc.csv`, `data/gwas_geno_truth.csv`
-- 생성 스크립트: `data-raw/simulate_genotypes.R`
-:::
 
 ::: {.callout-important collapse="true"}
 ## 실습 자료 — KNU-Lipid 코호트 확장판

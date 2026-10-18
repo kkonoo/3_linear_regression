@@ -1,5 +1,5 @@
 ---
-title: "1-I. Simple Linear Regression: Estimation and Inference"
+title: "I. Simple Linear Regression: Estimation and Inference"
 description: "단순선형회귀의 최소제곱 추정과 통계적 추론 — GWAS의 단일 SNP 검정"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="1-I. 단순선형회귀: 추정과 추론">
+        <meta name="ai-title" content="I. 단순선형회귀: 추정과 추론">
         <meta name="ai-context" content="
         이 챕터는 단순선형회귀(simple linear regression)의 추정과 추론을 다룹니다.
         모형은 Y_i = beta_0 + beta_1 * X_i + e_i 이며, 오차항에 대해 네 가지를 가정합니다:
@@ -20,14 +20,6 @@ format:
         참값은 0.28로 95% 신뢰구간 (0.275, 0.397) 안에 있지만 점추정치가 큰 이유는 1-II와 3-III에서 드러납니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `1-I. (Simple) Estimation_and_inference.docx`
-- 원자료의 의료기기 매출 자료(meddcor)를 **GWAS 코호트**로 교체
-- 데이터: `data/gwas_cohort.csv`
-- 생성 스크립트: `data-raw/simulate_cohort.R` (`set.seed(20260918)`)
-:::
 
 ::: {.callout-important collapse="true"}
 ## 실습 자료 — KNU-Lipid 코호트

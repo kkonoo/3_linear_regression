@@ -1,5 +1,5 @@
 ---
-title: "4-I. Logistic Regression: Basic Concepts and Estimation"
+title: "I. Logistic Regression: Basic Concepts and Estimation"
 description: "이분형 반응, odds와 logit, odds ratio 해석, 최대가능도 추정 — METABRIC 유방암 코호트"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="4-I. 로지스틱 회귀: 기본 개념과 추정">
+        <meta name="ai-title" content="I. 로지스틱 회귀: 기본 개념과 추정">
         <meta name="ai-context" content="
         이 챕터는 로지스틱 회귀의 기본 개념과 추정을 다루며, 실습 자료는 METABRIC 유방암 코호트입니다.
         반응변수가 0/1일 때 선형회귀를 쓰면 예측확률이 0~1 범위를 벗어나고 등분산 가정도 깨집니다.
@@ -22,12 +22,6 @@ format:
         ER 양성의 odds ratio는 0.262로 보호적입니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `4-I. (Logistic) Basic Concepts and Estimation.docx`
-- 데이터: `data/metabric.csv`
-:::
 
 ::: {.callout-important collapse="true"}
 ## 실습 자료 — METABRIC 유방암 코호트

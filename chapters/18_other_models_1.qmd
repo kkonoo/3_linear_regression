@@ -1,5 +1,5 @@
 ---
-title: "6-I. Other Regression Models (1): WLS, Robust, Nonparametric"
+title: "I. Other Regression Models (1): WLS, Robust, Nonparametric"
 description: "가중최소제곱, 로버스트 회귀, 비선형·비모수 회귀와 GAM — 메틸화 비율, eQTL, NMR 대사체"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="6-I. 기타 회귀모형 (1): WLS, 로버스트, 비모수">
+        <meta name="ai-title" content="I. 기타 회귀모형 (1): WLS, 로버스트, 비모수">
         <meta name="ai-context" content="
         이 챕터는 선형회귀의 가정이 하나씩 깨질 때 쓰는 대안 모형 세 가지를 다룹니다.
         첫째, 등분산 가정이 깨지면 가중최소제곱(WLS)을 씁니다. 예제는 bisulfite 시퀀싱 메틸화 비율 M/m입니다.
@@ -28,23 +28,6 @@ format:
         GAM은 backfitting으로 적합하며, smooth.spline으로 직접 구현한 결과가 mgcv::gam과 상관 0.9999로 일치합니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `6-I. (others) weighted, robust, nonlinear, nonparametric.docx`
-- 원자료의 예제를 생물학 자료로 교체
-
-| 원자료 | 이 장 |
-|---|---|
-| 발병률 $Y = D/m$ | CpG 메틸화 비율 $M/m$ (KNU-Methyl) |
-| 두꺼운 꼬리 분포 | LDLR eQTL — 라플라스 오차 + 이상치 |
-| NMR 주파수 자료 | 1H-NMR 대사체 스펙트럼 (시뮬레이션) |
-| 가법모형 | 메틸화 ~ s(나이) + s(BMI) |
-
-- 데이터: `data/methyl_cpg.csv`, `data/eqtl_ldlr.csv`, `data/nmr_spectrum.csv`,
-  `data/rnaseq_*.csv`, `data/gwas_cohort.csv`
-- 생성 스크립트: `data-raw/simulate_part6_1.R` (`set.seed(20260921)`)
-:::
 
 ::: {.callout-important collapse="true"}
 ## 이 장의 실습 자료 — 참값

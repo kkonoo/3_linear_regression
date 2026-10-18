@@ -1,5 +1,5 @@
 ---
-title: "3-I. Multiple Linear Regression: Estimation"
+title: "I. Multiple Linear Regression: Estimation"
 description: "설계행렬, 최소제곱 추정, 그리고 회귀계수의 해석 — 유전형과 공변량을 함께 넣은 LDL 모형"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="3-I. 다중선형회귀: 추정">
+        <meta name="ai-title" content="I. 다중선형회귀: 추정">
         <meta name="ai-context" content="
         이 챕터는 설명변수가 여러 개인 다중선형회귀의 추정을 다룹니다.
         모형은 Y = X * beta + e이며 설계행렬(design matrix) X로 간결하게 표현합니다.
@@ -24,13 +24,6 @@ format:
         나이와 유전형의 교호작용 검정은 F = 0.14, p = 0.87로 평행선 모형이면 충분합니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `3-I. (Multiple) Estimation and inference.docx`
-- 원자료의 의료기기 매출(meddcor)을 **KNU-Lipid 코호트**로 교체
-- 데이터: `data/gwas_cohort.csv` (1-I 참고)
-:::
 
 ## 1. Objectives and Data Examples
 

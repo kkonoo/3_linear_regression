@@ -1,5 +1,5 @@
 ---
-title: "2-II. ANOVA: Multiple Comparison and Model Fit"
+title: "II. ANOVA: Multiple Comparison and Model Fit"
 description: "Tukey 다중비교, ANOVA의 모형 진단, ANOVA와 회귀의 관계 — 유전형별 LDL과 APOE별 중성지방"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="2-II. ANOVA: 다중비교와 모형적합">
+        <meta name="ai-title" content="II. ANOVA: 다중비교와 모형적합">
         <meta name="ai-context" content="
         이 챕터는 ANOVA에서 F-검정 이후의 절차를 다룹니다.
         F-검정이 유의하면 어느 집단끼리 다른지 알기 위해 쌍별 비교를 합니다.
@@ -27,14 +27,6 @@ format:
         Tukey 15쌍 중 6쌍이 유의합니다. e2/e2는 다른 모든 유전형보다 높습니다(제3형 고지단백혈증 경향).
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `2-II. (ANOVA) Basic Concepts and Estimation.docx`
-- 원자료의 성부별 키 → **유전형별 LDL** (2-I과 같은 자료)
-- 원자료의 암 종류별 생존일수(CancerStudy) → **APOE 유전형별 중성지방**
-- 데이터: `data/gwas_cohort.csv`, `data/gwas_cohort_ext.csv`
-:::
 
 ```{r}
 #| label: setup

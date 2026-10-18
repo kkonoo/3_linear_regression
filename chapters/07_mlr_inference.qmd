@@ -1,5 +1,5 @@
 ---
-title: "3-II. Multiple Linear Regression: Inference and Prediction"
+title: "II. Multiple Linear Regression: Inference and Prediction"
 description: "회귀계수의 추론, 부분 F-검정, 회귀선 추정과 예측 — 공변량을 보정한 유전 연관과 개인 LDL 예측"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="3-II. 다중선형회귀: 추론과 예측">
+        <meta name="ai-title" content="II. 다중선형회귀: 추론과 예측">
         <meta name="ai-context" content="
         이 챕터는 다중선형회귀의 통계적 추론과 예측을 다룹니다.
         추정량 beta-hat의 분산-공분산 행렬은 sigma^2 * (X'X)^(-1)이며, 각 계수는 자유도 n-p-1인 t분포를 따릅니다.
@@ -24,13 +24,6 @@ format:
         60세 남성, BMI 27, Group1, 유전형 BB의 평균 LDL 95% 신뢰구간 폭은 0.21, 예측구간 폭은 2.63입니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `3-II. (Multiple) Statistical Inference and Prediction.docx`
-- 원자료의 주별 SAT 점수(SATData)를 **KNU-Lipid 코호트**로 교체 (3-I과 같은 모형)
-- 데이터: `data/gwas_cohort.csv`
-:::
 
 ```{r}
 #| label: setup

@@ -26,35 +26,54 @@ website:
       - chapters/00_setup.qmd
       - section: "Part 1. Simple Linear Regression"
         contents:
-          - chapters/01_slr_estimation.qmd
-          - chapters/02_slr_prediction.qmd
-          - chapters/03_slr_examples.qmd
+          - text: "I. Estimation and Inference"
+            href: chapters/01_slr_estimation.qmd
+          - text: "II. Prediction and Model Evaluation"
+            href: chapters/02_slr_prediction.qmd
+          - text: "III. Data Examples"
+            href: chapters/03_slr_examples.qmd
       - section: "Part 2. ANOVA"
         contents:
-          - chapters/04_anova_basics.qmd
-          - chapters/05_anova_comparison.qmd
+          - text: "I. Basic Concepts and Estimation"
+            href: chapters/04_anova_basics.qmd
+          - text: "II. Multiple Comparison and Model Fit"
+            href: chapters/05_anova_comparison.qmd
       - section: "Part 3. Multiple Linear Regression"
         contents:
-          - chapters/06_mlr_estimation.qmd
-          - chapters/07_mlr_inference.qmd
-          - chapters/08_mlr_diagnostics.qmd
-          - chapters/09_mlr_casestudy.qmd
+          - text: "I. Estimation"
+            href: chapters/06_mlr_estimation.qmd
+          - text: "II. Inference and Prediction"
+            href: chapters/07_mlr_inference.qmd
+          - text: "III. Diagnostics and Multicollinearity"
+            href: chapters/08_mlr_diagnostics.qmd
+          - text: "IV/V. Case Studies"
+            href: chapters/09_mlr_casestudy.qmd
       - section: "Part 4. Generalized Linear Models"
         contents:
-          - chapters/10_logistic_basics.qmd
-          - chapters/11_logistic_inference.qmd
-          - chapters/12_logistic_casestudy.qmd
-          - chapters/13_poisson_basics.qmd
-          - chapters/14_poisson_inference.qmd
+          - text: "I. Logistic Regression: Basic Concepts and Estimation"
+            href: chapters/10_logistic_basics.qmd
+          - text: "II. Logistic Regression: Inference, Model Assessment and Classification"
+            href: chapters/11_logistic_inference.qmd
+          - text: "III. Case Study: Case-Control GWAS"
+            href: chapters/12_logistic_casestudy.qmd
+          - text: "IV. Poisson Regression: Basic Concepts and Estimation"
+            href: chapters/13_poisson_basics.qmd
+          - text: "V. Poisson Regression: Inference and Model Assessment"
+            href: chapters/14_poisson_inference.qmd
       - section: "Part 5. Variable Selection"
         contents:
-          - chapters/15_varsel_basics.qmd
-          - chapters/16_regularized.qmd
-          - chapters/17_varsel_casestudy.qmd
+          - text: "I. Basics of Variable Selection"
+            href: chapters/15_varsel_basics.qmd
+          - text: "II. Regularized Regression"
+            href: chapters/16_regularized.qmd
+          - text: "III. Case Study: Polygenic Risk Score"
+            href: chapters/17_varsel_casestudy.qmd
       - section: "Part 6. Other Regression Models"
         contents:
-          - chapters/18_other_models_1.qmd
-          - chapters/19_other_models_2.qmd
+          - text: "I. WLS, Robust, Nonparametric"
+            href: chapters/18_other_models_1.qmd
+          - text: "II. Time Series, Spatial, Mixed Effects"
+            href: chapters/19_other_models_2.qmd
       - section: "부록"
         contents:
           - chapters/A1_cheatsheet.qmd

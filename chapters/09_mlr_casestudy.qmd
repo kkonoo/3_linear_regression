@@ -1,5 +1,5 @@
 ---
-title: "3-IV/V. Multiple Linear Regression: Case Studies"
+title: "IV/V. Multiple Linear Regression: Case Studies"
 description: "집단층화와 가짜 연관, 범주형 유전형 모형, 다유전자 위험점수 예측"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="3-IV/V. 다중선형회귀 사례연구 — GWAS">
+        <meta name="ai-title" content="IV/V. 다중선형회귀 사례연구 — GWAS">
         <meta name="ai-context" content="
         이 챕터는 다중선형회귀의 전 과정을 GWAS 코호트(KNU-Lipid, n=1494)로 실습합니다.
         첫째 사례는 집단층화(population stratification)입니다.
@@ -25,13 +25,6 @@ format:
         검정자료에서 RMSE와 상관으로 정확도를 평가하며, 95% 예측구간의 실제 포함률을 확인합니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `3-IV,V. (Multiple) Case Study.docx` · 그림 26
-- 데이터: `data/gwas_cohort.csv`
-- 앞 장(3-III)에서 만든 `gwc`(FH 보인자 제외)를 이어서 씀
-:::
 
 ```{r}
 #| label: setup

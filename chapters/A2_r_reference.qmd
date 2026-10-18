@@ -24,13 +24,6 @@ format:
         ">
 ---
 
-::: {.callout-note collapse="true"}
-## 원자료
-- `resource_R_reference_card.pdf` (R Reference Card), `resource_R_intro.pdf` (Introduction to R)
-- 원자료의 R 기초를 짧게 요약하고, **이 강의에서 실제로 쓴 함수**를 용도별로 정리
-- 실행 예제 데이터: `data/gwas_cohort.csv` (KNU-Lipid, [1-I](01_slr_estimation.qmd) 참고)
-:::
-
 ## 1. R 기초
 
 ### 1.1 값과 벡터

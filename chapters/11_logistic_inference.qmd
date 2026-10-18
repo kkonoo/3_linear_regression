@@ -1,5 +1,5 @@
 ---
-title: "4-II. Logistic Regression: Inference, Model Assessment and Classification"
+title: "II. Logistic Regression: Inference, Model Assessment and Classification"
 description: "Wald 검정과 가능도비 검정, 잔차와 적합도, 과산포, 분류와 교차검증"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="4-II. 로지스틱 회귀: 추론·적합도·분류">
+        <meta name="ai-title" content="II. 로지스틱 회귀: 추론·적합도·분류">
         <meta name="ai-context" content="
         이 챕터는 로지스틱 회귀의 추론, 모형 적합도 평가, 분류를 다룹니다. 자료는 METABRIC입니다.
         MLE는 근사적으로 정규분포를 따르므로 검정통계량이 t가 아니라 z입니다. 대표본이 아니면 1종 오류가 커집니다.
@@ -26,12 +26,6 @@ format:
         AUC는 0.772이고 10-fold 교차검증 AUC는 0.764입니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `4-II. (Logistic) Statistical Inference, Model Assessment and Classification.docx`
-- 데이터: `data/metabric.csv`
-:::
 
 ```{r}
 #| label: setup

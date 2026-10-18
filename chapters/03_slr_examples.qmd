@@ -1,5 +1,5 @@
 ---
-title: "1-III. Simple Linear Regression: Data Examples"
+title: "III. Simple Linear Regression: Data Examples"
 description: "부모–자녀 LDL 회귀로 유전 이론 검정하기, 중성지방의 로그 변환과 단일유전자 이상값"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="1-III. 단순선형회귀 데이터 예제">
+        <meta name="ai-title" content="III. 단순선형회귀 데이터 예제">
         <meta name="ai-context" content="
         이 챕터는 단순선형회귀의 전체 흐름을 두 가지 유전학 자료로 실습합니다.
         첫째, 부모-자녀 회귀입니다. 가계 코호트 KNU-Family 300가계에서 자녀 3명의 평균 LDL(Y)을 부모 평균 LDL(X)에 회귀합니다.
@@ -24,23 +24,6 @@ format:
         사용 파일: data/family_cohort.csv, data/gwas_cohort.csv, data/gwas_cohort_ext.csv
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `1-III. (Simple) Data examples.docx`
-- 원자료의 두 예제를 유전학 자료로 교체
-
-| 원자료 | 이 장 | 공통 구조 |
-|---|---|---|
-| 구매력평가(PPP) — 환율 ~ 물가 차이 | 부모–자녀 LDL 회귀 | 이론이 기울기 값을 예측 → $H_0: \beta_1 = 1$ |
-| 브라질 (초인플레이션) | FH 가계 (단일유전자) | 영향점 하나 |
-| 선진국 / 개도국으로 나누기 | 아버지 / 어머니로 나누기 | 하위집단 분석 |
-| 플로리다 대선 — Buchanan ~ Bush 득표 | 중성지방 ~ BMI | 로그 변환 |
-| Palm Beach (나비형 투표용지) | LPL 결핍 1명 | 다른 기전의 이상값 |
-
-- 데이터: `data/family_cohort.csv`, `data/gwas_cohort.csv`, `data/gwas_cohort_ext.csv`
-- 생성 스크립트: `data-raw/simulate_part6_2.R`, `data-raw/simulate_cohort_ext.R`
-:::
 
 ::: {.callout-important collapse="true"}
 ## 새 실습 자료 — KNU-Family, KNU-Lipid 확장

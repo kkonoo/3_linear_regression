@@ -1,5 +1,5 @@
 ---
-title: "2-I. ANOVA: Basic Concepts and Estimation"
+title: "I. ANOVA: Basic Concepts and Estimation"
 description: "분산분석의 기본 개념, 추정, 그리고 평균 동일성 F-검정 — 유전형별 LDL"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="2-I. ANOVA: 기본 개념과 추정">
+        <meta name="ai-title" content="I. ANOVA: 기본 개념과 추정">
         <meta name="ai-context" content="
         이 챕터는 분산분석(ANOVA, analysis of variance)의 기본 개념과 추정을 다룹니다.
         ANOVA는 세 개 이상 집단의 평균이 모두 같은지 검정합니다 (두 집단이면 t-test).
@@ -20,13 +20,6 @@ format:
         집단 평균은 AA 2.938, AB 3.178, BB 3.770이며 F = 64.82 (2, 1497), p < 2e-16입니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `2-I. (ANOVA) Basic Concepts and Estimation.docx`
-- 원자료의 합창단원 성부별 키를 **유전형별 LDL**로 교체
-- 데이터: `data/gwas_cohort.csv` (1-I의 KNU-Lipid 코호트)
-:::
 
 ## 1. Basics of ANOVA
 

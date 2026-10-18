@@ -1,5 +1,5 @@
 ---
-title: "3-III. Multiple Linear Regression: Diagnostics and Multicollinearity"
+title: "III. Multiple Linear Regression: Diagnostics and Multicollinearity"
 description: "가정 진단, 모형 평가, 다중공선성과 VIF — GWAS 코호트 실습"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="3-III. 다중선형회귀: 진단과 다중공선성">
+        <meta name="ai-title" content="III. 다중선형회귀: 진단과 다중공선성">
         <meta name="ai-context" content="
         이 챕터는 다중선형회귀의 진단과 평가를 다루며, 실습 자료는 GWAS 코호트(KNU-Lipid, n=1500)입니다.
         네 가지 가정(선형성, 등분산, 독립성, 정규성)을 잔차로 점검합니다.
@@ -24,13 +24,6 @@ format:
         각각 단독으로는 p가 1e-16 이하인 SNP들이 함께 넣으면 p = 0.92, 0.99로 바뀝니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `3-III. (Multiple) Model Diagnostics, Evaluation and Multicolinearity.docx` · 수식 28 / 그림 10
-- 데이터: `data/gwas_cohort.csv`
-- 생성 스크립트: `data-raw/simulate_cohort.R`
-:::
 
 ::: {.callout-important collapse="true"}
 ## 실습 자료 — KNU-Lipid 코호트 (1-I에서 소개, 복습)

@@ -1,5 +1,5 @@
 ---
-title: "4-III. Case Study: Case-Control GWAS"
+title: "III. Case Study: Case-Control GWAS"
 description: "이분형 형질에 대한 유전체 연관분석 — odds ratio, 집단층화, 매개변수 과보정, 예측력"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="4-III. 사례연구: 케이스-컨트롤 GWAS">
+        <meta name="ai-title" content="III. 사례연구: 케이스-컨트롤 GWAS">
         <meta name="ai-context" content="
         이 챕터는 로지스틱 회귀의 전 과정을 케이스-컨트롤 GWAS로 실습합니다.
         자료는 Part 3에서 쓴 KNU-Lipid 코호트의 이분형 형질 disease이며 n = 1494, 사례 386명입니다.
@@ -24,13 +24,6 @@ format:
         Hosmer-Lemeshow 검정은 구간 개수 G에 따라 p가 0.02에서 0.80까지 흔들립니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `4-III. (Logistic) Case Study_The Demographics of Obesity.docx`
-- 원자료의 비만 인구통계 사례를 **케이스-컨트롤 GWAS**로 교체
-- 데이터: `data/gwas_cohort.csv` (Part 3과 동일)
-:::
 
 ```{r}
 #| label: setup

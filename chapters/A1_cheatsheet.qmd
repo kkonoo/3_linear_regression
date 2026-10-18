@@ -23,15 +23,6 @@ format:
         ">
 ---
 
-::: {.callout-note collapse="true"}
-## 원자료
-- `Statistical Inference Reference Sheet.pdf`, `cheat_sheet_for_hypothesis.pdf`,
-  `hypothesis.testing.pdf`, `Statistics Consulting Cheat Sheet.pdf`,
-  `Stat 100 Final Cheat Sheets.pdf`, `stat test cheat sheet*.jpg`
-- 원자료는 기초통계의 일반 치트시트 → 개조식으로 다시 정리하고 **이 강의의 검정**을 덧붙임
-- 실행 예제 데이터: `data/gwas_cohort.csv`, `data/family_cohort.csv`
-:::
-
 ```{r}
 #| label: setup
 #| include: false

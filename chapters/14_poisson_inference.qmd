@@ -1,5 +1,5 @@
 ---
-title: "4-V. Poisson Regression: Inference and Model Assessment"
+title: "V. Poisson Regression: Inference and Model Assessment"
 description: "Wald와 이탈도 검정, 잔차와 적합도, 과산포와 음이항 회귀 — RNA-seq 차등발현"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="4-V. 포아송 회귀: 추론과 모형 평가">
+        <meta name="ai-title" content="V. 포아송 회귀: 추론과 모형 평가">
         <meta name="ai-context" content="
         이 챕터는 포아송 회귀의 추론과 모형 평가, 특히 과산포를 다룹니다. 자료는 가상 RNA-seq 카운트입니다.
         추론은 로지스틱과 같은 구조입니다. 개별 계수는 Wald z 검정, 부분집합과 전체 회귀는 이탈도 차이로 봅니다.
@@ -24,12 +24,6 @@ format:
         비선형 관계는 다항식이나 mgcv의 평활항으로 모형화합니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `4-V. (Poisson) Statistical Inference, Model Assessment and Classification.docx`
-- 데이터: `data/rnaseq_counts.csv`, `data/rnaseq_samples.csv`, `data/rnaseq_truth.csv`
-:::
 
 ```{r}
 #| label: setup

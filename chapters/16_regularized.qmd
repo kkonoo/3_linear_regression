@@ -1,5 +1,5 @@
 ---
-title: "5-II. Regularized Regression"
+title: "II. Regularized Regression"
 description: "벌점회귀 — Ridge, Lasso, Elastic Net과 λ의 선택"
 author: "Eunji Ha"
 date: today
@@ -7,7 +7,7 @@ format:
   html:
     include-in-header:
       text: |
-        <meta name="ai-title" content="5-II. 벌점회귀">
+        <meta name="ai-title" content="II. 벌점회귀">
         <meta name="ai-context" content="
         Ridge, Lasso, Elastic Net을 공변량 보정된 GWAS 자료로 비교합니다.
         Y와 SNP 양쪽을 훈련자료에서 잔차화하고 검정자료에는 훈련 변환만 적용합니다.
@@ -15,12 +15,6 @@ format:
         계수는 반응 잔차 SD / SNP 잔차 SD를 곱해 원단위 참값과 비교합니다. 수치는 본문 계산을 참조합니다.
         ">
 ---
-
-::: {.callout-note collapse="true"}
-## 원자료
-- `5-II. (Model selection) Regularized Regression.docx`
-- 데이터: `data/gwas_geno_wide.csv.gz`, `data/gwas_tc.csv`, `data/gwas_geno_truth.csv`
-:::
 
 ```{r}
 #| label: setup

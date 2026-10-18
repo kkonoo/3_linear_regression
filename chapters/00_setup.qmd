@@ -22,12 +22,6 @@ format:
         ">
 ---
 
-::: {.callout-note collapse="true"}
-## 원자료
-- `0_Getting_Started/` — 강의 소개, `resource_R_intro.pdf`, `resource_R_reference_card.pdf`
-- R 문법 기초와 함수 정리는 [부록 B](A2_r_reference.qmd)로 옮김
-:::
-
 ## 1. R & RStudio
 
 ### 설치
