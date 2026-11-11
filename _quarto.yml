@@ -94,6 +94,7 @@ format:
     toc-depth: 4
     toc-title: "Contents"
     toc-float: true
+    lightbox: auto        # 그림을 누르면 크게 보기
     page-layout: full
 
     code-fold: false
