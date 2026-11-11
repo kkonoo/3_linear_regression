@@ -62,7 +62,7 @@ format:
 ```
 
 - **작업 디렉터리 = 저장소 폴더** 로 두고 `read.csv("data/...")`처럼 상대경로로 읽음
-  - RStudio: *File → New Project → Existing Directory* 로 저장소 폴더를 프로젝트로 열면 자동
+  - RStudio: *File → New Project → Existing Directory* 로 저장소 폴더를 프로젝트로 열면 작업 디렉터리가 자동으로 맞춰짐
   - 또는 `setwd("저장소 경로")`
 
 ## 2. 패키지 설치
