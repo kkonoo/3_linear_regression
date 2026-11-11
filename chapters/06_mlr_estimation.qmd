@@ -264,6 +264,8 @@ $$\hat\sigma^2 = MSE \sim \chi^2_{n-p-1}$$
 - 뒤에 나올 예제: $\hat\beta_{bmi}$가 marginal 0.0583 → conditional 0.0476
 :::
 
+![BMI도 높고 LDL도 높은 Group2가 섞여 있으면, BMI만 넣은 회귀(marginal, 점선)의 기울기가 Group을 함께 넣은 회귀(conditional, 실선)의 기울기보다 가파르게 나온다. 데이터는 설명용 가상의 예다.](../assets/img/ch06/marginal_conditional.png){fig-alt="BMI(가로축)와 LDL(세로축)의 산점도. 왼쪽 아래에 Group1, 오른쪽 위에 Group2 점들이 모여 있고, 각 그룹 안에는 완만한 평행한 conditional 직선이, 두 그룹 전체를 가로질러서는 더 가파른 marginal 점선이 그려져 있다."}
+
 **직접 해 보기** — [교란변수와 배치효과 ↗](https://kkonoo.github.io/edu_sims/sims/confounding/?lang=ko){target="_blank"}
 
 ::: {.column-page}
