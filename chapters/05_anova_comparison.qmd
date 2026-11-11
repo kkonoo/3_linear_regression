@@ -276,6 +276,8 @@ coef(fit.lm)
   - 나머지 계수 = **기준 범주 대비 차이**
   - 예: `genoBB` = BB 평균 − AA 평균 = 0.831 (Tukey의 diff와 동일)
 
+![세 수준의 유전형(geno)은 기준 범주 AA를 뺀 더미 2개(genoAB, genoBB)로 들어가며, AA 행은 두 더미가 모두 0이라 절편만 남는다. 그래서 절편은 AA의 평균(2.938)이 되고, 나머지 계수는 각 유전형 평균에서 AA 평균을 뺀 차이(예: genoBB = 0.831)가 된다.](../assets/img/ch05/dummy_coding.png){fig-alt="왼쪽에 유전형 AA(기준), AB, BB가 세 줄로 있고, 가운데 표에서 각 줄이 (Intercept)=1, genoAB, genoBB의 0/1 값으로 바뀐다. AA는 0,0, AB는 1,0, BB는 0,1이다. 오른쪽에는 β0 = 절편 = AA 평균 2.938, β1 = AB 평균 − AA 평균, β2 = BB 평균 − AA 평균 = 0.831이 적혀 있고, 아래에 회귀식 Y_i = β0 + β1 x_i1 + β2 x_i2 + ε_i와 더미를 k − 1개만 쓰는 이유가 있다."}
+
 ```{r}
 #| label: no-intercept
 ## 절편을 빼면 k개 더미 → 계수가 곧 각 집단 평균
