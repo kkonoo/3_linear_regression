@@ -119,6 +119,8 @@ $$\text{odds} = \frac{p}{1-p}, \qquad
 - logit — odds에 로그를 씌운 것. 정의역 $(0,1)$을 $(-\infty, \infty)$로 **펴 줌**
 - → 펴 놓은 축 위에서는 선형모형을 쓸 수 있음
 
+![본문 표의 예 p = 0.1, 0.5, 0.9가 odds와 logit 축의 어디로 옮겨 가는지를 선으로 이었다. odds에서는 1 아래쪽이 좁은 (0, 1)에 눌리지만, logit으로 펴면 p = 0.5가 가운데 0에 놓이고 양쪽이 대칭으로 끝없이 뻗는다.](../assets/img/ch10/p_odds_logit.png){fig-alt="세 개의 가로 수직선. 위는 0에서 1까지의 확률 p, 가운데는 0에서 무한대까지의 odds, 아래는 음의 무한대에서 무한대까지의 logit. p 0.1, 0.5, 0.9가 각각 odds 0.111, 1, 9와 logit −2.20, 0, 2.20으로 선으로 이어져 있다."}
+
 ### 1.3 모형
 
 $$\text{logit}\{p(\mathbf{x})\} = \log\frac{p(\mathbf{x})}{1-p(\mathbf{x})}
@@ -128,9 +130,13 @@ $$\text{logit}\{p(\mathbf{x})\} = \log\frac{p(\mathbf{x})}{1-p(\mathbf{x})}
 
 $$p(\mathbf{x}) = \frac{e^{z}}{1 + e^{z}} = \frac{1}{1 + e^{-z}}$$
 
+![로지스틱 곡선은 기울기 β₁이 클수록 가파르게 0에서 1로 넘어가고, 모든 곡선이 z = 0에서 p = 0.5를 지난다(β₀ = 0으로 둔 설명용 그림).](../assets/img/ch10/sigmoid.png){fig-alt="β₁ = 0.5, 1, 3인 세 로지스틱 곡선이 x = 0, p = 0.5에서 만나며 β₁이 클수록 S자가 가파르고 색이 진한 그래프"}
+
 ```{r}
 #| label: sigmoid
-#| fig-cap: "로지스틱 곡선 — 기울기 beta가 클수록 가파름"
+#| code-fold: true
+#| code-summary: "R 코드 보기"
+#| fig-keep: none
 z <- seq(-6, 6, length.out = 200)
 plot(z, 1 / (1 + exp(-z)), type = "l", lwd = 2, col = "#4c72b0",
      xlab = "z = linear predictor", ylab = "p")
