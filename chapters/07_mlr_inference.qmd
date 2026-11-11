@@ -162,6 +162,8 @@ $$SSReg(X_1,\ldots,X_p) = SSReg(X_1) + SSReg(X_2 \mid X_1)
 | $SSReg(X_2\mid X_1)$ | $X_1$을 넣은 **뒤 남은 것 중** $X_2$가 설명하는 변동 |
 | $SSReg(X_3\mid X_1,X_2)$ | $X_1, X_2$를 넣은 뒤 $X_3$가 설명하는 변동 |
 
+![전체 SSReg는 두 순서에서 같다. bmi와 pop이 함께 설명하는 겹치는 부분은 먼저 들어간 변수의 순차제곱합에 들어가므로, bmi의 몫은 순서 A에서 크고 순서 B에서 작으며 pop은 그 반대다(길이는 설명용).](../assets/img/ch07/sequential_ss.png){fig-alt="가로 막대 두 개. 위 막대(순서 A, bmi 먼저)는 SSReg(bmi)로 묶인 bmi 칸과 겹치는 부분, SSReg(pop | bmi)인 짧은 pop 칸, 나머지 변수 칸으로 나뉜다. 아래 막대(순서 B, pop 먼저)는 SSReg(pop)로 묶인 pop 칸과 겹치는 부분, SSReg(bmi | pop)인 짧은 bmi 칸, 나머지 변수 칸으로 나뉜다. 두 막대의 전체 길이는 SSReg(X1,…,Xp)로 같다."}
+
 ::: {.callout-important}
 - 각 항은 **앞에 무엇이 들어갔는지에 따라 값이 달라짐**
 - → `anova()`의 Sum Sq는 **변수를 쓴 순서에 의존**
