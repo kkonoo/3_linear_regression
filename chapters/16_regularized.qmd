@@ -85,9 +85,13 @@ $$\min \|\mathbf{y} - \mathbf{X}\boldsymbol\beta\|^2
 \quad \text{or} \quad
 \underbrace{\sum_j\beta_j^2 \le t}_{L_2: \ \text{원}}$$
 
+![제약영역(색칠한 면)과 SSE 등고선(타원) — 등고선이 제약영역에 처음 닿는 점이 해. 원(L2)에서는 두 계수가 모두 0이 아닌 곳에서 닿고, 마름모(L1)에서는 축 위 모서리에서 닿아 $\beta_2 = 0$이 됨 (설명용)](../assets/img/ch16/l1_l2_geometry.png){fig-alt="왼쪽은 원 모양 L2 제약영역에 타원 등고선이 축 밖에서 닿는 그림, 오른쪽은 마름모 모양 L1 제약영역의 모서리에 등고선이 닿아 베타2가 0인 그림"}
+
 ```{r}
 #| label: l1-l2-geometry
-#| fig-cap: "제약영역의 모양 — L1은 축 위에 뾰족한 모서리가 있음"
+#| code-fold: true
+#| code-summary: "R 코드 보기"
+#| fig-keep: none
 #| fig-width: 8
 #| fig-height: 4
 op <- par(mfrow = c(1, 2), mar = c(4, 4, 2, 1), pty = "s")
@@ -191,9 +195,13 @@ $$\hat{\boldsymbol\beta}_{\text{lasso}}
 $$\hat\beta_j = S(z_j, \lambda) =
 \mathrm{sign}(z_j)\,\bigl(\lvert z_j\rvert - \lambda\bigr)_+$$
 
+![연성임계 — 노란 띠 |z| ≤ λ 안의 작은 계수는 정확히 0이 되고, 큰 계수는 OLS보다 λ만큼 당겨진다. Ridge는 모든 계수를 같은 비율 1/(1+λ)로 줄일 뿐 0으로 만들지 않는다(λ = 1).](../assets/img/ch16/soft_threshold.png){fig-alt="가로축 z(OLS 추정), 세로축 벌점 추정치. 점선 대각선은 OLS, 기울기 1/2 직선은 Ridge이다. Lasso는 −λ와 λ 사이의 노란 띠에서 0으로 평평하고, 띠 밖에서는 OLS와 나란하게 λ만큼 아래에 있다."}
+
 ```{r}
 #| label: soft-threshold
-#| fig-cap: "연성임계 — 작은 계수는 0으로, 큰 계수는 일정량만큼 당겨짐"
+#| code-fold: true
+#| code-summary: "R 코드 보기"
+#| fig-keep: none
 z <- seq(-3, 3, length.out = 400)
 soft <- function(z, l) sign(z) * pmax(abs(z) - l, 0)
 plot(z, z, type = "l", lty = 2, col = "grey50", xlab = "z (OLS 추정)",
@@ -245,6 +253,8 @@ $$\hat{\boldsymbol\beta}_{\text{EN}}
 
 - `lambda.1se`가 더 단순한 모형을 줌 → 해석이 목적이면 이쪽
 - 예측이 목적이면 보통 `lambda.min`
+
+![자료를 K조각으로 나눠 한 조각씩 검증에 쓰고, λ마다 K개 검증 오차를 평균해 CV 곡선을 만든다. `lambda.min`은 곡선의 최소점, `lambda.1se`는 최소 오차에서 1 표준오차 안에 드는 가장 큰 λ다(곡선은 설명용).](../assets/img/ch16/kfold_cv.png){fig-alt="왼쪽은 K개 행마다 다른 한 조각이 검증, 나머지가 훈련인 K-fold 격자와 각 행의 검증 오차 e1부터 eK, 가운데 화살표로 평균, 오른쪽은 log λ에 따른 CV 오차 곡선에 lambda.min과 lambda.1se를 점선으로 표시한 도식."}
 
 ## 3. Data Examples
 
