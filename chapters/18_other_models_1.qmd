@@ -63,6 +63,8 @@ suppressMessages({
 })
 ```
 
+![선형회귀의 네 가정과, 각 가정이 깨질 때 Part 6에서 쓰는 모형 (6-II §4의 표를 그림으로 옮김)](../assets/img/ch18/assumption_map.png){fig-alt="선형성, 등분산, 독립성, 정규성 네 칸 아래에 각각 비선형 회귀와 GAM, WLS, 시계열·공간 회귀와 혼합효과모형, 로버스트 회귀가 예제와 함께 놓인 도식"}
+
 ## 1. Weighted Least Squares Regression
 
 ### 1.1 등분산 가정이 깨질 때
@@ -474,9 +476,13 @@ $$f(y \mid \mu, \sigma) = \frac{1}{2\sigma}\,e^{-|y - \mu|/\sigma}$$
 - 라플라스(이중지수) 분포 — 정규분포와 달리 지수에 $(y-\mu)^2$ 대신 $|y - \mu|$가 들어감
 - 대칭이지만 **정규보다 꼬리가 두꺼움**
 
+![분산이 1로 같은 정규분포와 라플라스 분포이다. 라플라스는 가운데가 뾰족하고, 오른쪽 꼬리(y ≥ 2.5)를 확대하면 밀도가 정규보다 천천히 줄어 꼬리가 두껍다.](../assets/img/ch18/laplace.png){fig-alt="왼쪽은 -4부터 4까지 정규분포와 라플라스 분포의 밀도 곡선으로, 라플라스가 가운데에서 더 높고 뾰족하다. 오른쪽은 y가 2.5에서 4인 꼬리 부분을 확대한 그림으로, 라플라스 곡선이 정규 곡선보다 계속 위에 있고 두 곡선 사이가 칠해져 있다."}
+
 ```{r}
 #| label: laplace-plot
-#| fig-cap: "분산이 같은 정규분포와 라플라스 분포 — 라플라스는 가운데가 뾰족하고 꼬리가 두꺼움"
+#| code-fold: true
+#| code-summary: "R 코드 보기"
+#| fig-keep: none
 #| fig-width: 6
 #| fig-height: 4
 xx <- seq(-4, 4, length.out = 400)
@@ -555,6 +561,8 @@ $$\hat{\boldsymbol\beta} = \arg\min_{\boldsymbol\beta}
 $$\hat{\boldsymbol\beta}^{(t+1)} =
 (\mathbf X^\top\mathbf V^{(t)}\mathbf X)^{-1}\mathbf X^\top\mathbf V^{(t)}\mathbf Y,
 \qquad v_i^{(t)} = \frac{1}{|r_i^{(t)}|}$$
+
+![잔차가 커질수록 제곱손실(OLS)은 빠르게 커지지만 절대손실(LAD)과 Huber는 직선으로만 늘어나므로, 큰 잔차 하나가 추정을 끌고 가지 못한다. 오른쪽은 같은 차이를 IRLS 가중치로 본 것으로, LAD에서는 잔차가 클수록 가중치 1/|r|이 작아진다(Huber 경계 c는 설명용).](../assets/img/ch18/loss_functions.png){fig-alt="왼쪽은 잔차 r에 대한 세 손실함수 곡선으로, r²(OLS)은 포물선, |r|(LAD)은 V자, Huber는 −c와 c 사이에서는 포물선이고 바깥에서는 직선이다. 큰 잔차에서 r²과 |r|의 차이가 화살표로 표시되어 있다. 오른쪽은 IRLS 가중치로, OLS는 1로 일정하고 LAD는 1/|r|로 0 근처에서 치솟았다가 잔차가 커질수록 줄며, Huber는 c 안에서 1이고 바깥에서 줄어든다."}
 
 ```{r}
 #| label: lad-irls
