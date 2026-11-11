@@ -256,7 +256,7 @@ b  <- coef(cv, s = "lambda.1se")
 rownames(b)[b[, 1] != 0][-1]                # Lasso가 남긴 변수
 ```
 
-- 두 방법 모두 LD 블록에서 `snp_LDLR` 하나만, 귀무 SNP는 버림
+- 두 방법 모두 LD 블록에서 `snp_LDLR` 하나만 남기고, 귀무 SNP는 버림
 - `snp_AIM`은 집단(`pop`)을 넣지 않았기 때문에 선택됨 — 가짜 연관 ([3-IV/V](09_mlr_casestudy.qmd))
 
 ## 7. 행렬 계산 — 공식 직접 계산
