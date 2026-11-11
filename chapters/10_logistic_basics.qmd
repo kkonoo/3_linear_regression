@@ -145,7 +145,7 @@ legend("topleft", bty = "n", lwd = 2,
 ::: {.callout-warning}
 ## 오차항이 없다
 - 선형회귀: $Y = \mathbf{x}^T\boldsymbol\beta + \varepsilon$ — 평균과 분산이 **따로**
-- 로지스틱: $Y \sim \mathrm{Bernoulli}(p(\mathbf{x}))$ — 분산이 $p(1-p)$로 **평균에 의해 결정됨**
+- 로지스틱: $Y \sim \mathrm{Bernoulli}(p(\mathbf{x}))$ — 분산이 $p(1-p)$로 **평균에 따라 결정됨**
 - → 따로 더할 오차항이 없음. $\sigma^2$이라는 모수도 없음
 - 이 때문에 "과산포(overdispersion)"라는 별도의 문제가 생김 (4-II, 4-V)
 :::
@@ -210,7 +210,7 @@ c(n = nrow(bc), events = sum(bc$death5),
 
 ### 2.2 logit으로 바꾸면 선형이 되는가
 
-- 원자료의 흡연 예제와 같은 확인 방법
+- 확인 방법은 원자료의 흡연 예제와 같음
 - 연속형 $X$를 구간으로 나눠 **경험적 logit**을 계산해 그려 봄
 
 $$\widehat{\text{logit}}_k = \log\frac{y_k + 0.5}{n_k - y_k + 0.5}$$
