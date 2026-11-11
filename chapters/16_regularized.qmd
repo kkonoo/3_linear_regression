@@ -143,7 +143,7 @@ rbind(selected = c(no_std = sum(b_ns != 0), std = sum(b_s != 0)),
       mean_maf = c(mean(maf[b_ns != 0]), mean(maf[b_s != 0])))
 ```
 
-- 표준화하지 않으면 **흔한 변이(MAF가 큰 SNP)** 쪽으로 쏠림 (평균 MAF `r round(mean(maf[b_ns != 0]), 3)` vs `r round(mean(maf[b_s != 0]), 3)`)
+- 표준화하지 않으면 선택이 **흔한 변이(MAF가 큰 SNP)** 쪽으로 쏠림 (평균 MAF `r round(mean(maf[b_ns != 0]), 3)` vs `r round(mean(maf[b_s != 0]), 3)`)
 - `glmnet`의 기본값은 `standardize = TRUE`이고, 계수는 원 척도로 되돌려 줌
 - 절편에는 벌점을 주지 않음
 
@@ -186,7 +186,7 @@ $$\hat{\boldsymbol\beta}_{\text{lasso}}
 + \lambda\|\boldsymbol\beta\|_1 \Bigr\}$$
 
 - 닫힌 해가 없음 → **좌표하강(coordinate descent)** 으로 품
-- 직교 설계에서는 한 좌표의 해가 **연성임계(soft-thresholding)**
+- 직교 설계에서는 한 좌표의 해가 **연성임계(soft-thresholding)**로 주어짐
 
 $$\hat\beta_j = S(z_j, \lambda) =
 \mathrm{sign}(z_j)\,\bigl(\lvert z_j\rvert - \lambda\bigr)_+$$
@@ -268,7 +268,7 @@ par(op)
 
 ### 3.2 교차검증
 
-- 아래 CV는 훈련자료에서 미리 만든 잔차·표준화 값에 조건부인 간단한 예제임
+- 아래 CV는 간단한 예제로, 훈련자료에서 미리 만든 잔차·표준화 값에 조건부임
 - 전처리를 포함한 전체 절차의 CV 오차를 보고하려면 **각 fold 안에서 잔차화·표준화부터 다시 적합**해야 함
 - 여기서는 최종 성능을 전처리에 쓰지 않은 별도 검정자료에서 평가함
 
@@ -308,7 +308,7 @@ round(res, 4)
 ## 세 방법의 비교 (고정된 모형의 검정 예측 ΔR²)
 
 - 공변량 기준모형도 훈련자료에서 고정하고, 검정자료에서는 재적합하지 않음
-- $\Delta R^2 = (SSE_{base} - SSE_{full}) / SST_{test}$; 음수면 SNP 추가가 예측을 악화시킴
+- $\Delta R^2 = (SSE_{base} - SSE_{full}) / SST_{test}$; 음수면 SNP를 추가해서 예측이 나빠졌다는 뜻임
 - PRS를 넣어 검정자료에 회귀를 다시 적합하는 **추가 설명력** 지표와 구분함
 
 | 방법 | 선택된 SNP | 그중 참 인과 | 증가 $R^2$ |
@@ -318,8 +318,8 @@ round(res, 4)
 | Elastic Net | `r res["enet.lambda.min", "nonzero"]` | `r res["enet.lambda.min", "true_causal"]` / 40 | `r round(res["enet.lambda.min", "inc_R2"], 3)` |
 | Ridge | `r res["ridge.lambda.min", "nonzero"]` | `r res["ridge.lambda.min", "true_causal"]` / 40 | `r round(res["ridge.lambda.min", "inc_R2"], 3)` |
 
-- 참 유전율 $h^2 = 0.385$는 생성자료의 참고값임. 공변량 조건부 예측 ΔR²와 분모·대상이 달라 단순히 나눠 회수율로 해석하지 않음
-- Ridge는 인과 SNP를 하나도 버리지 않지만, 귀무 SNP 1960개도 같이 들고 감
+- 참 유전율 $h^2 = 0.385$는 생성자료의 참고값임. 공변량에 조건부인 예측 ΔR²와는 분모·대상이 다름. 그래서 둘을 단순히 나눠 회수율로 해석하지 않음
+- Ridge는 인과 SNP를 하나도 버리지 않지만, 귀무 SNP 1960개도 같이 모형에 남김
   → **잡음이 신호를 덮어** 예측이 크게 나쁨
 - 신호가 희소한(sparse) 상황에서는 Lasso 계열이 유리
 :::
@@ -344,7 +344,7 @@ round(cor(Gtr[, kk]), 3)
 - 변환식: $\hat\beta_{original,j} = \hat\beta_{standardized,j}\,s_{Y,resid}/s_{G_j,resid}$
 - `snp_LDLR`의 참값은 0.24, Lasso 추정치는 **`r round(cf(cv_l)["snp_LDLR"], 4)`**
 - 표준화 계수를 0.24와 직접 비교해 “절반으로 축소”라고 해석하면 안 됨
-- 추정치와 참값의 차이에는 벌점에 의한 축소뿐 아니라 표본 변동과 공변량 모형의 영향도 포함됨
+- 추정치와 참값의 차이에는 벌점 때문에 생긴 축소뿐 아니라 표본 변동과 공변량 모형의 영향도 포함됨
 :::
 
 ::: {.callout-warning}
@@ -390,7 +390,7 @@ c(nonzero_SNP = sum(b[pf == 1] != 0), lambda = cvb$lambda.min)
 ```
 
 - 공변량은 `penalty.factor = 0`으로 유지하고, SNP에만 벌점을 적용함
-- 문법은 연속형과 완전히 같음 — 벌점만 이탈도에 붙음
+- 문법은 연속형과 완전히 같고, 벌점이 이탈도에 붙는다는 점만 다름
 
 $$\hat{\boldsymbol\beta} = \arg\min
 \Bigl\{ -\tfrac{1}{n}\ell(\boldsymbol\beta) + \lambda P(\boldsymbol\beta) \Bigr\}$$
