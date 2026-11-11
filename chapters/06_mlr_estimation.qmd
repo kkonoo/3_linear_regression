@@ -69,7 +69,7 @@ $$Y_i = \beta_0 + \beta_1 x_{i1} + \beta_2 x_{i2} + \cdots + \beta_p x_{ip} + \v
 
 $$\beta_0,\ \beta_1,\ \ldots,\ \beta_p,\ \sigma^2$$
 
-- 데이터가 아무리 많아도 어디까지나 **estimates**
+- 데이터가 아무리 많아도 계산한 값은 어디까지나 **estimates**
 
 ### 2.2 설계행렬로 표현하기
 
@@ -191,7 +191,7 @@ $$\sum_{i=1}^{n}\bigl(y_i - (\beta_0 + \beta_1 x_{i1} + \cdots + \beta_p x_{ip})
 = (\mathbf{Y} - \mathbf{X}\boldsymbol\beta)^T(\mathbf{Y} - \mathbf{X}\boldsymbol\beta)$$
 
 - 실수의 제곱이 행렬에서는 $\mathbf{X}^T\mathbf{X}$ 형태가 됨
-- 미분해서 0 → **정규방정식(normal equation)**
+- 미분해서 0으로 놓으면 → **정규방정식(normal equation)**
 
 $$\mathbf{X}^T\mathbf{X}\hat{\boldsymbol\beta} = \mathbf{X}^T\mathbf{Y}$$
 
@@ -201,7 +201,7 @@ $$\boxed{\hat{\boldsymbol\beta} = (\mathbf{X}^T\mathbf{X})^{-1}\mathbf{X}^T\math
 
 ::: {.callout-warning}
 - $\mathbf{X}^T\mathbf{X}$가 가역이 아니면 해가 유일하지 않음
-- 원인: 설명변수들이 선형종속 → **완전 다중공선성**
+- 원인: 설명변수들이 선형종속인 상태, 즉 **완전 다중공선성**
 - Part 3-III에서 다룸
 :::
 
@@ -320,7 +320,8 @@ summary(model)
 ```
 
 - 읽는 법
-  - `pop`이 2수준 factor → 더미 1개(`popGroup2`)가 자동 생성, 기준 범주는 Group1
+  - `pop`이 2수준 factor → 더미 1개(`popGroup2`)가 자동 생성
+  - 기준 범주는 Group1
   - 잔차 자유도 = $1500 - (5+1) = 1494$
   - $\hat\sigma = 0.669$, $R^2 = 0.278$
 
@@ -332,7 +333,8 @@ summary(model)
 | `bmi` | 0.0476 | 0.042 | BMI 1당 |
 | `popGroup2` | 0.506 | 0.52 | Group2 − Group1 |
 
-- 대부분 참값 근처, `snp_LDLR`만 위로 치우침 — 1-I과 같은 이유 (3-III)
+- 대부분 참값 근처
+- `snp_LDLR`만 위로 치우침 — 1-I과 같은 이유 (3-III)
 
 ### 5.1 Marginal vs. Conditional — 실제로 비교
 
@@ -363,7 +365,8 @@ aggregate(cbind(bmi, ldl) ~ pop, data = gw, FUN = mean)
 
 - 차이가 나는 이유
   - Group2는 BMI가 평균 0.70 높고, LDL도 0.52 높음 (BMI와 무관한 집단 효과)
-  - BMI만 넣으면 → "BMI가 높은 사람 = Group2일 가능성이 높은 사람" → 집단 효과가 BMI 계수에 **섞여 들어감**
+  - BMI가 높은 사람은 Group2일 가능성이 높음
+  - 그래서 BMI만 넣으면 집단 효과가 BMI 계수에 **섞여 들어감**
   - 집단을 넣으면 그 몫이 빠져 참값에 가까워짐
 - 이런 변수(집단)를 **교란변수(confounder)** 라고 부름 — 3-IV/V의 집단층화가 극단적인 예
 
